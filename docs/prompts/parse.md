@@ -7,7 +7,9 @@ Dependencies: pymupdf, langchain, pymongo, python-dotenv
 """
 
 # --- Config (config.py) ---
-# PDF_FILE = os.path.join(ROOT, "data", "Owners_Manual.pdf")
+# PDF_FILE   = os.path.join(ROOT, "data", "Owners_Manual.pdf")
+# PAGE_START = 5                                # first content page (0-indexed)
+# PAGE_END   = 313                              # last content page (0-indexed, inclusive)
 # CHUNK_SIZE    = 256                           # tokens
 # CHUNK_OVERLAP = 50                            # tokens
 
@@ -23,6 +25,7 @@ Dependencies: pymupdf, langchain, pymongo, python-dotenv
 
 def load_pdf(file_path: str) -> List[Document]:
     # open PDF with fitz
+    # iterate pages in range [PAGE_START, PAGE_END] inclusive
     # for each page: extract text, skip if empty
     # return List[Document] — one Document per page
 
@@ -31,7 +34,7 @@ def chunk(raw_docs: List[Document]) -> List[Document]:
     # assign unique_id = md5(chunk.page_content) into each chunk's metadata
     # return List[Document] — one Document per chunk
 
-    # TODO: 
+    # TODO:
 
 def save(chunks: List[Document]) -> None:
     # for each chunk:
