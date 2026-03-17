@@ -1,6 +1,12 @@
 __pycache__/
-*.pyc
+._____temp/
+.vscode/
+logs/
 .env
-*.egg-info/
-dist/
-.venv/
+
+models/
+mongodb-7.0.20/
+
+data/mongodb
+data/index
+experiments/
