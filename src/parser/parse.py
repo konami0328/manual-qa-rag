@@ -9,7 +9,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel
 from pymongo.collection import Collection
 
-from config import PDF_FILE, CHUNK_SIZE, CHUNK_OVERLAP, PAGE_START, PAGE_END
+from config import PDF_FILE, CHUNK_SIZE, CHUNK_OVERLAP, PAGE_START, PAGE_END, PAGE_CROP_TOP, PAGE_CROP_BOTTOM
 from src.client.mongodb_config import MongoConfig
 from src.fields.mongodb_info import ManualInfo
 
@@ -37,11 +37,13 @@ _splitter   = RecursiveCharacterTextSplitter(
 # --- Pipeline ---
 
 def load_pdf(file_path: str) -> List[Document]:
-    """Extract text from pages [PAGE_START, PAGE_END] inclusive; skip empty pages."""
+    """Extract text from pages [PAGE_START, PAGE_END] inclusive; crop header/footer; skip empty pages."""
     pdf  = fitz.open(file_path)
     docs = []
-    for page_num in tqdm(range(PAGE_START - 1, PAGE_END)):  # convert to 0-indexed
-        text = pdf.load_page(page_num).get_text()
+    for page_num in tqdm(range(PAGE_START - 1, PAGE_END)):
+        page = pdf.load_page(page_num)
+        clip = fitz.Rect(0, PAGE_CROP_TOP, page.rect.width, page.rect.height - PAGE_CROP_BOTTOM)
+        text = page.get_text(clip=clip)
         if not text.strip():
             continue
         docs.append(Document(

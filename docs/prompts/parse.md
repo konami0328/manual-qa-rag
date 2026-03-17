@@ -7,11 +7,13 @@ Dependencies: pymupdf, langchain, pymongo, python-dotenv
 """
 
 # --- Config (config.py) ---
-# PDF_FILE   = os.path.join(ROOT, "data", "Owners_Manual.pdf")
-# PAGE_START = 5                                # first content page (0-indexed)
-# PAGE_END   = 313                              # last content page (0-indexed, inclusive)
-# CHUNK_SIZE    = 256                           # tokens
-# CHUNK_OVERLAP = 50                            # tokens
+# PDF_FILE         = os.path.join(ROOT, "data", "Owners_Manual.pdf")
+# PAGE_START       = 5                          # first content page (1-indexed, inclusive)
+# PAGE_END         = 313                        # last content page (1-indexed, inclusive)
+# PAGE_CROP_TOP    = 55                         # pt to crop from top (removes header)
+# PAGE_CROP_BOTTOM = 25                         # pt to crop from bottom (removes footer)
+# CHUNK_SIZE       = 256                        # tokens
+# CHUNK_OVERLAP    = 50                         # tokens
 
 # --- Data Model (src/fields/manual_info.py) ---
 # class ManualInfo(BaseModel):
@@ -26,7 +28,8 @@ Dependencies: pymupdf, langchain, pymongo, python-dotenv
 def load_pdf(file_path: str) -> List[Document]:
     # open PDF with fitz
     # iterate pages in range [PAGE_START, PAGE_END] inclusive
-    # for each page: extract text, skip if empty
+    # for each page: extract text within crop rect (exclude header/footer)
+    # skip if empty
     # return List[Document] — one Document per page
 
 def chunk(raw_docs: List[Document]) -> List[Document]:

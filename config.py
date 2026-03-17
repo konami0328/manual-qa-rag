@@ -9,6 +9,8 @@ BM25_PKL_FILE = os.path.join(ROOT, "data", "index", "bm25retriever.pkl")
 
 PAGE_START = 5
 PAGE_END = 313
+PAGE_CROP_TOP = 55
+PAGE_CROP_BOTTOM = 25
 CHUNK_SIZE = 256
 CHUNK_OVERLAP = 50
 TOPK = 5
