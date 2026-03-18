@@ -9,4 +9,7 @@ mongodb-7.0.20/
 
 data/mongodb
 data/index
+data/clean_docs.pkl
 experiments/
+
+test.py
