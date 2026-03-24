@@ -1,3 +1,5 @@
+# 1. PARSE
+```
 """
 parse.py
 Input:  PDF file path (PDF_FILE from config.py)
@@ -28,48 +30,56 @@ def main():
     clean_docs  = request_llm_clean(raw_docs)   # from src.client.llm_clean
     pickle.dump(clean_docs, open(CLEAN_DOCS_PATH, "wb"))
     print(f"Saved {len(clean_docs)} cleaned pages to {CLEAN_DOCS_PATH}")
+```
 
 
-
-
+# 2. CHUNK
+```
 """
 chunk_index.py
-Input:  cleaned List[Document] from pickle (CLEAN_DOCS_PATH from config.py)
-Output: chunked Document objects saved to MongoDB (manual_text collection)
+Input:  cleaned List[Document] from pickle (CLEAN_DOCS_PATH)
+Output: chunked Documents saved to MongoDB (manual_text collection)
 
-Dependencies: langchain, pymongo, tiktoken
+Dependencies: langchain, pymongo, sentence-transformers
 """
 
 # --- Config (config.py) ---
-# CLEAN_DOCS_PATH  = os.path.join(ROOT, "data", "clean_docs.pkl")
-# CHUNK_SIZE       = 256                        # tokens
-# CHUNK_OVERLAP    = 50                         # tokens
+# CLEAN_DOCS_PATH      = os.path.join(ROOT, "data", "clean_docs.pkl")
+# EMBEDDING_MODEL_PATH = "models/BAAI/bge-m3"
+# BREAKPOINT_PERCENTILE = 75                    # lower percentile = more splits
+# MAX_CHUNKS_PER_PAGE   = 5
 
 # --- Data Model (src/fields/manual_info.py) ---
 # class ManualInfo(BaseModel):
-#     unique_id:    str
+#     unique_id:    str                         # md5(page_content)
 #     page_content: Optional[str]
-#     metadata:     dict                        # { source: str, page: int }
-#
-# unique_id = md5(chunk.page_content)
+#     metadata:     dict                        # {source: str, page: int}
 
 # --- Pipeline ---
 
-def chunk(clean_docs: List[Document]) -> List[Document]:
-    # split each page with RecursiveCharacterTextSplitter(CHUNK_SIZE, CHUNK_OVERLAP)
-    # assign unique_id = md5(chunk.page_content) into each chunk's metadata
-    # return List[Document] — one Document per chunk
-
-    # TODO:
+def semantic_chunk(clean_docs: List[Document]) -> List[Document]:
+    """
+    For each page:
+    1. Split by \n\n into paragraphs
+    2. Compute embedding similarity between adjacent paragraphs (bge-m3)
+    3. Split at low-similarity boundaries (below percentile threshold)
+    4. If chunks > MAX_CHUNKS_PER_PAGE, merge most similar neighbors
+    5. Assign unique_id = md5(page_content) to each chunk
+    
+    Returns: List[Document] with metadata inherited from original page
+    """
+    pass
 
 def save(chunks: List[Document]) -> None:
-    # for each chunk:
-    #   1. validate via ManualInfo(unique_id, page_content, metadata)
-    #   2. upsert into MongoDB by unique_id (update_one, upsert=True)
-    #   3. skip if validation fails
+    """
+    Validate via ManualInfo, upsert to MongoDB by unique_id
+    Skip on validation failure
+    """
+    pass
 
 def main():
     clean_docs = pickle.load(open(CLEAN_DOCS_PATH, "rb"))
-    chunks     = chunk(clean_docs)
+    chunks     = semantic_chunk(clean_docs)
     save(chunks)
     print(f"Saved {len(chunks)} chunks to MongoDB")
+```

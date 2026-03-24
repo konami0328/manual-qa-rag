@@ -1,4 +1,5 @@
 # 1. GENERATE (USE LLM TO GENERATE TRAINING DATA AND FINETUNE)
+```
 """
 llm_generate.py
 Input:  query (str), context (str)
@@ -33,10 +34,11 @@ def request_chat(query: str, context: str) -> str:
     # format prompt with query and context
     # call OpenAI API
     # return response string
-
+```
 
 
 # 2. CLEAN (USE LLM TO CLEAN RAW PDF TEXT)
+```
 """
 llm_clean.py
 Input:  List[Document] — raw pages from load_pdf()
@@ -54,11 +56,13 @@ Dependencies: openai, python-dotenv
 # --- Prompt ---
 LLM_CLEAN_PROMPT = """
 You are a document formatting assistant for automotive owner's manuals.
-Clean the following text extracted from a PDF with a two-column layout:
+Clean the following text extracted from a PDF:
 
 1. Fix broken line breaks caused by column wrapping: if a line does not end with .!?, merge it with the next line using a space.
 2. Remove redundant whitespace and artifacts from PDF extraction.
-3. Do NOT rephrase, summarize, reorder, add, or remove any content. Preserve the original wording and structure exactly.
+3. Preserve or insert \n\n to separate distinct content blocks (different topics, sections, alert entries, etc.).
+
+Note: Do NOT rephrase, summarize, reorder, add, or remove any content. Preserve the original wording and structure exactly.
 
 Text to clean:
 {}
@@ -73,3 +77,43 @@ def request_llm_clean(docs: List[Document]) -> List[Document]:
     # for each doc: format prompt, call API, return cleaned text
     # preserve original metadata
     # return List[Document] with cleaned page_content
+```
+
+
+# 3. GENERATE QA (FOR FINETUNING REEANKER & LLM)
+```
+LLM_GENERATE_QA_PROMPT = """
+You are creating a Q&A dataset for a Tesla Model Y owner's manual retrieval system.
+
+Generate 5 realistic question-answer pairs based on the document below. These questions should reflect what actual car owners would ask.
+
+**Question Requirements:**
+- Real user questions: "How do I...", "What happens if...", "Can I...", "Where is...", "When should..." etc.
+- At least ONE must require synthesizing multiple sentences or steps (e.g., "What are the steps to...", "What conditions are needed for...")
+- NO meta-questions about document structure or location
+
+**Answer Requirements:**
+- Complete and self-contained (2-4 sentences)
+- NO references to other sections or page numbers
+- For each answer, include "evidence": the EXACT text from the document that supports it (copy word-for-word)
+
+**Output Format (JSON only, no markdown):**
+```json
+[
+  {
+    "question": "",
+    "answer": "",
+    "evidence": ""
+  }
+]
+
+**Return `[]` if:** text contains no actionable content.
+
+**Document:**
+<document>
+{{document}}
+</document>
+
+Generate Q&A pairs (JSON only):
+"""
+```

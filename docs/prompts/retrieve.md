@@ -1,4 +1,5 @@
 # 1. BM25 Retriever
+```
 """
 bm25_retriever.py
 Input:  List[Document] (chunks from MongoDB) OR None (load from pkl)
@@ -30,6 +31,8 @@ class BM25:
     def retrieve_topk(self, query: str, topk: int = 5) -> List[Document]:
         # tokenize query
         # return top-k Documents by BM25 score
-
+```
 
 # 2. 
+```
+```

@@ -13,11 +13,13 @@ from config import MAX_WORKERS
 
 LLM_CLEAN_PROMPT = """
 You are a document formatting assistant for automotive owner's manuals.
-Clean the following text extracted from a PDF with a two-column layout:
+Clean the following text extracted from a PDF:
 
 1. Fix broken line breaks caused by column wrapping: if a line does not end with .!?, merge it with the next line using a space.
 2. Remove redundant whitespace and artifacts from PDF extraction.
-3. Do NOT rephrase, summarize, reorder, add, or remove any content. Preserve the original wording and structure exactly.
+3. Preserve or insert \n\n to separate distinct content blocks (different topics, sections, alert entries, etc.).
+
+Note: Do NOT rephrase, summarize, reorder, add, or remove any content. Preserve the original wording and structure exactly.
 
 Text to clean:
 {}
@@ -58,7 +60,7 @@ def _clean_doc(doc: Document, max_retries: int = 3) -> Document:
 
 
 def request_llm_clean(docs: List[Document]) -> List[Document]:
-    """Clean docs concurrently; only process first 10 for validation."""
+    """Clean docs concurrently; only process some docs for validation."""
     results = [None] * len(docs)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -80,5 +82,5 @@ if __name__ == "__main__":
 
     for doc in cleaned_docs:
         print(f"\n── page={doc.metadata['page']} ──")
-        print(doc.page_content)
+        print(repr(doc.page_content))
         print("=" * 60)

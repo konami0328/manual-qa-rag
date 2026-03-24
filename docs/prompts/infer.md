@@ -1,3 +1,4 @@
+```
 """
 infer.py
 Input:  query (str) — from user input
@@ -20,3 +21,4 @@ def infer(query: str) -> str:
 def main():
     # load BM25 index from pkl (retrieve=True)
     # loop: input query → infer → print answer
+```
