@@ -56,18 +56,30 @@ Dependencies: openai, python-dotenv
 # --- Prompt ---
 LLM_CLEAN_PROMPT = """
 You are a document formatting assistant for automotive owner's manuals.
-Clean the following text extracted from a PDF:
+Clean and split the following text extracted from a PDF page.
 
+### Step 1 — Clean
 1. Fix broken line breaks caused by column wrapping: if a line does not end with .!?, merge it with the next line using a space.
 2. Remove redundant whitespace and artifacts from PDF extraction.
-3. Preserve or insert \n\n to separate distinct content blocks (different topics, sections, alert entries, etc.).
+3. Remove any HTML tags (e.g. <p>, <br>, <div>).
 
-Note: Do NOT rephrase, summarize, reorder, add, or remove any content. Preserve the original wording and structure exactly.
+### Step 2 — Split
+Insert ---SPLIT--- immediately BEFORE each new code-like identifier or heading,
+not after. The delimiter must appear on its own line before the new unit begins.
+A new semantic unit begins whenever the topic, subject, or focus clearly shifts.
+This can be signaled by a new code-like identifier (e.g. alphanumeric labels at the start of a line)
+or a new heading/title (e.g. a short capitalized line that introduces a new topic).
 
-Text to clean:
+### Rules
+- Do NOT split within a single alert entry under any circumstance.
+- Do NOT insert ---SPLIT--- at the very beginning or very end of the output.
+- Do NOT rephrase, summarize, reorder, add, or remove any content.
+- Preserve the original wording exactly.
+
+### Input
 {}
 
-Cleaned output:
+### Output
 """
 
 # --- Function ---
