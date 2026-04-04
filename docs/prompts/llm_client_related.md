@@ -64,7 +64,7 @@ Clean and split the following text extracted from a PDF page.
 3. Remove any HTML tags (e.g. <p>, <br>, <div>).
 
 ### Step 2 — Split
-Insert ---SPLIT--- immediately BEFORE each new code-like identifier or heading,
+Insert <<<SPLIT>>> immediately BEFORE each new code-like identifier or heading,
 not after. The delimiter must appear on its own line before the new unit begins.
 A new semantic unit begins whenever the topic, subject, or focus clearly shifts.
 This can be signaled by a new code-like identifier (e.g. alphanumeric labels at the start of a line)
@@ -72,7 +72,8 @@ or a new heading/title (e.g. a short capitalized line that introduces a new topi
 
 ### Rules
 - Do NOT split within a single alert entry under any circumstance.
-- Do NOT insert ---SPLIT--- at the very beginning or very end of the output.
+- Do NOT split numbered or bulleted list items — a list is a single semantic unit.
+- Do NOT insert <<<SPLIT>>> at the very beginning or very end of the output.
 - Do NOT rephrase, summarize, reorder, add, or remove any content.
 - Preserve the original wording exactly.
 

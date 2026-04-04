@@ -62,5 +62,6 @@ if __name__ == "__main__":
     bm25    = BM25Retriever(docs)
     results = bm25.retrieve_topk("How to Adjust the Shoulder Anchor Height", topk=3)
     for r in results:
-        print(r.page_content[:])
+        print(f"Page: {r.metadata.get('page')}")
+        print(r.page_content)
         print("=" * 60)
