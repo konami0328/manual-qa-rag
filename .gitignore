@@ -4,7 +4,9 @@ __pycache__/
 logs/
 .env
 
-models/
+models/*
+!models/download.sh
+
 mongodb-7.0.20/
 
 data/mongodb
