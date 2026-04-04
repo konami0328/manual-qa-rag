@@ -162,12 +162,171 @@ Page 45 (steps 1-3) and page 46 (step 4) are separate chunks due to page boundar
 
 ---
 
+## 4. Reranker
+
+### Overview
+
+Hybrid retrieval returns ~14-20 candidates including irrelevant chunks that share surface-level keyword overlap with the query (e.g. "Adjusting Liftgate Opening Height" retrieved for "How to Adjust the Shoulder Anchor Height"). A cross-encoder reranker filters these out before generation.
+
+---
+
+### Architecture
+
+```
+~14-20 candidates from HybridRetriever
+  ↓
+FlagReranker — score each (query, chunk) pair
+  ↓
+threshold filter (score > RERANKER_THRESHOLD)
+  ↓
+sort by score descending
+  ↓
+final chunks → LLM generate
+```
+
+---
+
+### Why cross-encoder over threshold on hybrid search
+
+RRF scores are rank-derived (`1/(60+rank)`) — not interpretable as relevance thresholds. Cross-encoder scores are trained relevance signals in `[0, 1]` range (with `normalize=True`) — directly threshold-able.
+
+---
+
+### Model: `bge-reranker-v2-m3`
+
+- Cross-encoder, same BAAI family as bge-m3
+- Input: `(query, passage)` pairs → single relevance score
+- Fast (~0.1-0.5s for 14 chunks), deterministic
+- `normalize=True`: maps raw scores to `[0, 1]` for interpretable thresholding
+- Score stored in `metadata["rerank_score"]` for debugging
+
+---
+
+### Threshold calibration
+
+`RERANKER_THRESHOLD=0.1` — validated on query "How to Adjust the Shoulder Anchor Height":
+- Page 45 (main procedure): `0.9994` ✅
+- Page 46 (step 4 continuation): `0.23` ✅
+- All 12 irrelevant candidates dropped ✅
+
+**Edge case — cross-page split + reranker:**
+Page 46 is a short incomplete chunk (step 4 only). Its rerank score (`0.23`) is significantly lower than page 45 (`0.9994`) despite being part of the same procedure. This is expected — the chunk lacks full context. It survived `RERANKER_THRESHOLD=0.1` but is fragile. If threshold is raised above `0.23`, step 4 is lost. Do not raise threshold above `0.2` until Issue 5 (cross-page merge) is resolved.
+
+---
+
 ### Decisions deferred
 
 | Decision | Reason |
 |---|---|
+| Qwen3-Reranker-4B | Heavier (4B), slower; cross-encoder sufficient for current query set. Revisit for complex/multi-faceted queries |
+| Query decomposition | Multi-faceted queries ("how to adjust X and Y") degrade retrieval + reranking. Implement if such queries appear in eval set |
 | WeightedRanker sparse:dense ratio | No eval data yet to justify tuning |
-| ColBERT retrieval | Storage cost, milvus-lite support, diminishing returns |
-| Query decomposition for multi-faceted queries | Not in current query set; implement if needed |
-| Score threshold on hybrid search | RRF scores not interpretable as thresholds; handled by reranker instead |
-| Issue 5 cross-page merge | Requires `merge_pages()` in `parse.py`; deferred, mitigated by BM25 union |
+| Finetune RERANKER_THRESHOLD | Blocked by Issue 5 — page 46 fragile at current threshold |
+
+---
+
+## 5. Evaluation Dataset Generation (Planned)
+
+### Overview
+
+Before optimizing generation, a ground truth QA dataset is needed to separate retrieval failures from generation failures. Without it, there is no signal on which layer is the bottleneck.
+
+---
+
+### Architecture
+
+```
+MongoDB chunks
+      ↓
+length filter (>= 100 chars)     ← skip short/context-dependent chunks
+      ↓
+LLM generate 5 QA pairs per chunk
+      ↓
+quality filter ("unable to", "not mentioned")   ← drop bad answers
+      ↓
+question expansion (5 paraphrases per question) ← retrieval robustness
+      ↓
+train/test split (90/10)
+      ↓
+add negative samples (MS MARCO)
+      ↓
+final dataset: {question, answer, unique_id}
+```
+
+---
+
+### Ground Truth Mapping
+
+QA generated **per chunk**. `unique_id` is known before LLM call.
+
+```python
+for chunk in chunks:
+    if len(chunk.page_content) < 100:
+        continue                          # skip short chunks
+    qa_pairs = generate_qa(chunk)
+    for qa in qa_pairs:
+        qa["unique_id"] = chunk.metadata["unique_id"]  # ground truth
+        qa["page"]      = chunk.metadata["page"]
+```
+
+This gives:
+- `unique_id` → retrieval eval (did reranker surface the right chunk?)
+- `question` + `answer` → generation eval (RAGAS)
+
+---
+
+### Length Filter
+
+`MINIMAL_CHUNK_SIZE = 100` chars (excluding `\n`). Short chunks are almost always context-dependent (e.g. "4. Without pressing the button...") and cannot produce self-contained questions. Not a perfect proxy for self-containedness, but combined with the quality filter downstream it is sufficient.
+
+**Edge case — cross-page split (Issue 5):**
+Page 46 step 4 chunk (~130 chars) passes the length filter but is context-dependent. It will likely produce poor QA pairs. These are caught by the quality filter — answers containing "unable to determine" or "not mentioned" are dropped.
+
+---
+
+### Question Expansion (`GENERALIZE_PROMPT_TPL`)
+
+Each generated question → LLM generates 5 paraphrases with different phrasing styles. Expands dataset 6x and improves retrieval robustness — training data covers diverse query formulations for the same underlying question.
+
+---
+
+### Negative Samples (MS MARCO)
+
+**Why negatives are necessary:**
+Without negative samples, the model only sees answerable queries and learns to always generate an answer. It will hallucinate rather than return "No Answer" for out-of-domain queries.
+
+**Why MS MARCO:**
+- Real user search queries — natural phrasing, diverse topics
+- 500k+ queries available, easy to sample
+- Extremely unlikely to overlap with Tesla Model Y manual content
+- Already loadable via HuggingFace `datasets` (in `requirements.txt`)
+
+```python
+from datasets import load_dataset
+ds = load_dataset("ms_marco", "v2.1", split="train")
+negatives = [row["query"] for row in ds.shuffle(seed=42).select(range(1000))]
+```
+
+Target: ~1000-2000 negatives to match positive QA count. Label: `"answer": "No Answer"`.
+
+**Train/test split for negatives:** same 95/5 ratio as positives — negatives are cheap so bias toward train.
+
+---
+
+### Decisions deferred
+
+| Decision | Reason |
+|---|---|
+| Keyword extraction per answer | Not needed for current eval metrics (RAGAS + retrieval recall) |
+| QA quality scoring (LLM judge) | Quality filter by answer content is sufficient for now |
+| Negative sample ratio tuning | Start at 1:1 positive:negative, adjust after observing model behavior |
+| Manual QA pairs | Synthetic generation sufficient for baseline; revisit if RAGAS scores plateau |
+
+---
+
+### Eval Metrics Plan
+
+| Layer | Metric | Ground Truth Needed |
+|---|---|---|
+| Retrieval | `Recall@k`, `Precision@k`, `MRR` | `question → unique_id` |
+| Generation | `faithfulness`, `answer_relevancy`, `context_precision`, `context_recall` | `question, answer, context` (RAGAS) |

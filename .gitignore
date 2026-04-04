@@ -9,9 +9,9 @@ models/*
 
 mongodb-7.0.20/
 
-data/mongodb
-data/index
-data/clean_docs.pkl
+data/*
+!data/Owners_Manual.pdf
+
 experiments/
 
 test.py

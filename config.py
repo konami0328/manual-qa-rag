@@ -25,3 +25,6 @@ BGE_BATCH_SIZE       = 32
 
 RERANKER_MODEL_PATH = "models/AI-ModelScope/bge-reranker-v2-m3"
 RERANKER_THRESHOLD  = 0.1   # drop chunks below this score
+
+MINIMAL_CHUNK_SIZE = 15      # words
+QA_CKPT_PATH       = os.path.join(ROOT, "data", "test", "qa_pairs", "qa_raw.jsonl")  # for test
