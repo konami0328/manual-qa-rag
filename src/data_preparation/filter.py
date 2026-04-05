@@ -13,7 +13,7 @@ from config import QA_CKPT_PATH, MAX_WORKERS, MIN_SCORE, FILTER_PATH
 load_dotenv()
 
 # --- Config ---
-DEBUG        = True
+DEBUG        = False
 DEBUG_SIZE   = 30
 
 

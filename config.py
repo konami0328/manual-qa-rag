@@ -50,9 +50,16 @@ MAX_WORKERS_DATA   = 20      # concurrent LLM calls for data generation
 QA_CKPT_PATH       = os.path.join(ROOT, "data", "qa_pairs", "qa_raw.jsonl")
 FILTER_PATH        = os.path.join(ROOT, "data", "qa_pairs", "qa_filtered.jsonl")
 EXPAND_PATH        = os.path.join(ROOT, "data", "qa_pairs", "qa_expand.jsonl")
-TRAIN_PATH         = os.path.join(ROOT, "data", "qa_pairs", "train.json")
-TEST_PATH          = os.path.join(ROOT, "data", "qa_pairs", "test.json")
-MIN_SCORE          = 3       # scoring threshold
-NEGATIVE_COUNT     = 1000
-TRAIN_RATIO        = 0.9
-NEG_TRAIN_RATIO    = 0.95
+TRAIN_PATH         = os.path.join(ROOT, "data", "qa_pairs", "train.jsonl")
+VAL_PATH           = os.path.join(ROOT, "data", "qa_pairs", "val.jsonl")
+TEST_PATH          = os.path.join(ROOT, "data", "qa_pairs", "test.jsonl")
+MIN_SCORE          = 4       # scoring threshold
+NEGATIVE_COUNT     = 5000
+TRAIN_RATIO        = 0.7
+VAL_RATIO          = 0.2
+
+# =============================================================================
+# 6. Evaluation
+# =============================================================================
+EVAL_K_VALUES         = [1, 3, 5, 10]
+EVAL_RETRIEVAL_PATH   = os.path.join(ROOT, "data", "eval", "retrieval_results.csv")

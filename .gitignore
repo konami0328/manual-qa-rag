@@ -11,6 +11,8 @@ mongodb-7.0.20/
 
 data/
 !data/Owners_Manual.pdf
+!data/eval/
+!data/eval/*
 
 experiments/
 

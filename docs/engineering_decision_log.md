@@ -225,7 +225,7 @@ Page 46 is a short incomplete chunk (step 4 only). Its rerank score (`0.23`) is 
 
 ---
 
-## 5. Evaluation Dataset Generation (Planned)
+## 5. Evaluation Dataset Generation
 
 ### Overview
 
@@ -238,15 +238,15 @@ Before optimizing generation, a ground truth QA dataset is needed to separate re
 ```
 MongoDB chunks
       ↓
-length filter (>= 100 chars)     ← skip short/context-dependent chunks
+length filter (>= 15 words)      ← skip short/context-dependent chunks
       ↓
 LLM generate 5 QA pairs per chunk
       ↓
-quality filter ("unable to", "not mentioned")   ← drop bad answers
+LLM quality filter (score 1-5)   ← score each pair, save all with scores
       ↓
-question expansion (5 paraphrases per question) ← retrieval robustness
+question expansion               ← (planned) paraphrases per question
       ↓
-train/test split (90/10)
+train/val/test split (70/20/10)
       ↓
 add negative samples (MS MARCO)
       ↓
@@ -259,74 +259,135 @@ final dataset: {question, answer, unique_id}
 
 QA generated **per chunk**. `unique_id` is known before LLM call.
 
-```python
-for chunk in chunks:
-    if len(chunk.page_content) < 100:
-        continue                          # skip short chunks
-    qa_pairs = generate_qa(chunk)
-    for qa in qa_pairs:
-        qa["unique_id"] = chunk.metadata["unique_id"]  # ground truth
-        qa["page"]      = chunk.metadata["page"]
-```
-
 This gives:
-- `unique_id` → retrieval eval (did reranker surface the right chunk?)
-- `question` + `answer` → generation eval (RAGAS)
+- `unique_id` → retrieval eval (did retriever surface the right chunk?)
+- `question` + `answer` → generation eval (RAGAS, planned)
+
+---
+
+### Pipeline: generate.py
+
+- Load all chunks from MongoDB, filter by `MINIMAL_CHUNK_SIZE = 15` words
+- Concurrent LLM calls via `ThreadPoolExecutor(MAX_WORKERS=20)`
+- Checkpoint by `source_chunk_id` — safe to resume after interruption
+- Output: `data/qa_pairs/qa_raw.jsonl` — `{source_chunk_id, page, raw_resp}`
+
+---
+
+### Pipeline: filter.py
+
+- Load `qa_raw.jsonl`, fetch source chunk from MongoDB per `source_chunk_id`
+- LLM scores each (question, answer, chunk) pair on 1-5 scale
+- Checkpoint by `(source_chunk_id, question)` — safe to resume
+- Output: `data/qa_pairs/qa_filtered.jsonl` — `{source_chunk_id, page, question, answer, score, reason}`
+- Nothing dropped at this stage — all pairs saved with scores for flexible downstream filtering
+
+**Score criteria:**
+- 5: perfectly grounded, complete, self-contained
+- 4: mostly grounded, minor incompleteness
+- 3: acceptable but partially incomplete
+- 2: missing key info or partially ungrounded
+- 1: hallucinated, or references page numbers/sections
 
 ---
 
 ### Length Filter
 
-`MINIMAL_CHUNK_SIZE = 100` chars (excluding `\n`). Short chunks are almost always context-dependent (e.g. "4. Without pressing the button...") and cannot produce self-contained questions. Not a perfect proxy for self-containedness, but combined with the quality filter downstream it is sufficient.
+`MINIMAL_CHUNK_SIZE = 15` words. Short chunks are almost always context-dependent (e.g. "4. Without pressing the button...") and cannot produce self-contained questions. Combined with the quality filter downstream, this is sufficient.
 
 **Edge case — cross-page split (Issue 5):**
-Page 46 step 4 chunk (~130 chars) passes the length filter but is context-dependent. It will likely produce poor QA pairs. These are caught by the quality filter — answers containing "unable to determine" or "not mentioned" are dropped.
+Page 46 step 4 chunk (~130 chars) passes the length filter but is context-dependent. It will likely produce poor QA pairs caught by the quality filter (score 1-2).
 
 ---
 
-### Question Expansion (`GENERALIZE_PROMPT_TPL`)
-
-Each generated question → LLM generates 5 paraphrases with different phrasing styles. Expands dataset 6x and improves retrieval robustness — training data covers diverse query formulations for the same underlying question.
-
+## 6. Retrieval Evaluation
+ 
+### Overview
+ 
+Systematic comparison of all four retriever configurations on the test set to identify the best-performing pipeline before optimizing generation.
+ 
 ---
-
-### Negative Samples (MS MARCO)
-
-**Why negatives are necessary:**
-Without negative samples, the model only sees answerable queries and learns to always generate an answer. It will hallucinate rather than return "No Answer" for out-of-domain queries.
-
-**Why MS MARCO:**
-- Real user search queries — natural phrasing, diverse topics
-- 500k+ queries available, easy to sample
-- Extremely unlikely to overlap with Tesla Model Y manual content
-- Already loadable via HuggingFace `datasets` (in `requirements.txt`)
-
-```python
-from datasets import load_dataset
-ds = load_dataset("ms_marco", "v2.1", split="train")
-negatives = [row["query"] for row in ds.shuffle(seed=42).select(range(1000))]
+ 
+### Architecture
+ 
 ```
-
-Target: ~1000-2000 negatives to match positive QA count. Label: `"answer": "No Answer"`.
-
-**Train/test split for negatives:** same 95/5 ratio as positives — negatives are cheap so bias toward train.
-
+test.jsonl  →  {question, unique_id}
+                      ↓
+         ┌────────────┼────────────┬─────────────────┐
+         ↓            ↓            ↓                 ↓
+        BM25         BGE        Hybrid        Hybrid+Reranker
+         └────────────┴────────────┴─────────────────┘
+                      ↓
+               Hit@k + MRR
+                      ↓
+          data/eval/retrieval_results.csv
+```
+ 
 ---
-
-### Decisions deferred
-
-| Decision | Reason |
-|---|---|
-| Keyword extraction per answer | Not needed for current eval metrics (RAGAS + retrieval recall) |
-| QA quality scoring (LLM judge) | Quality filter by answer content is sufficient for now |
-| Negative sample ratio tuning | Start at 1:1 positive:negative, adjust after observing model behavior |
-| Manual QA pairs | Synthetic generation sufficient for baseline; revisit if RAGAS scores plateau |
-
+ 
+### Retrievers compared
+ 
+| Name | Description |
+|------|-------------|
+| BM25 | Keyword-based baseline |
+| BGE | Dense + sparse RRF internally via Milvus |
+| Hybrid | BGE + BM25 union, dedup by unique_id |
+| Hybrid+Reranker | Hybrid candidates reranked by `bge-reranker-v2-m3`, treated as ranked list |
+ 
 ---
-
-### Eval Metrics Plan
-
-| Layer | Metric | Ground Truth Needed |
-|---|---|---|
-| Retrieval | `Recall@k`, `Precision@k`, `MRR` | `question → unique_id` |
-| Generation | `faithfulness`, `answer_relevancy`, `context_precision`, `context_recall` | `question, answer, context` (RAGAS) |
+ 
+### Metrics
+ 
+**Hit@k** — 1 if ground truth `unique_id` appears in top-k results, else 0; averaged over all questions.
+ 
+**MRR (Mean Reciprocal Rank)** — `1/rank` if ground truth found, else 0; averaged over all questions. Computed once per retriever independent of k — reflects whether the correct chunk is ranked first, not just present.
+ 
+**Why not Recall@k or Precision@k:**
+Each question has exactly one ground truth `unique_id`. Under this condition, Recall@k = Hit@k (identical). Precision@k penalizes retrievers for returning unchosen-but-relevant chunks — unreliable with single-label ground truth.
+ 
+---
+ 
+### k sweep
+ 
+`EVAL_K_VALUES = [1, 3, 5, 10]` defined in `config.py`.
+ 
+For each retriever: retrieve top-`max(k)=10` once, slice to each k — avoids redundant retrieval calls per question.
+ 
+For `Hybrid+Reranker`: retrieve top-10 candidates → rerank → slice to k. Reranker may drop chunks below `RERANKER_THRESHOLD`, so Hit@k at small k may be lower than Hybrid alone — this is expected and meaningful signal about reranker precision.
+ 
+---
+ 
+### Results (500 samples, DEBUG=True)
+ 
+![Retrieval Evaluation](../data/eval/retrieval_results.png)
+ 
+| Retriever | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
+|-----------|-------|-------|-------|--------|-----|
+| BM25 | 0.346 | 0.504 | 0.556 | 0.626 | 0.4385 |
+| BGE | 0.400 | 0.554 | 0.636 | 0.700 | 0.4981 |
+| Hybrid | 0.400 | 0.554 | 0.636 | 0.700 | 0.4981 |
+| Hybrid+Reranker | — | — | — | — | — |
+ 
+Hybrid+Reranker skipped — cross-encoder requires GPU for practical eval speed (CPU: ~hours for 500 samples × 20 pairs). To be evaluated on GPU.
+ 
+---
+ 
+### Findings
+ 
+**BGE vs BM25:** BGE improves Hit@10 by +0.074 (0.626 → 0.700) and MRR by +0.060 (0.4385 → 0.4981). Semantic retrieval meaningfully outperforms keyword matching.
+ 
+**Hybrid = BGE:** BM25 union added zero new chunks to the candidate pool at `max_k=10`. BGE sparse already covers BM25's lexical matching — union dedup removed all BM25-only results. The cross-page split edge case (page 46, "shoulder anchor" query) was validated manually but does not show up as a measurable improvement at this scale.
+ 
+**Recall ceiling is the bottleneck:** Hit@10 = 0.700 means 30% of queries fail to surface the correct chunk within top-10. Reranker operates on the candidate pool and cannot recover these misses — improving reranker ordering will not address the root problem. The bottleneck is retrieval recall, not ranking quality.
+ 
+---
+ 
+### Next Steps -- Error Analysis
+ 
+| Priority | Action | Reason |
+|----------|--------|--------|
+| 1 | Evaluate Hit@20 / Hit@30 | Determine whether correct chunks exist deeper in the ranking or are truly missed |
+| 2 | Analyze failure cases | Identify whether misses are due to query-chunk vocabulary gap, cross-page splits, or chunk quality |
+| 3 | Improve recall | Based on failure analysis — candidates: larger TOPK, query expansion, fix Issue 5 |
+| 4 | Eval Hybrid+Reranker on GPU | Complete the comparison once recall is improved |
+ 

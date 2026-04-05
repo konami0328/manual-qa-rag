@@ -11,10 +11,10 @@ class Reranker:
     def __init__(self):
         self._model = FlagReranker(RERANKER_MODEL_PATH, use_fp16=True)
 
-    def rerank(self, query: str, docs: List[Document]) -> List[Document]:
+    def rerank(self, query: str, docs: List[Document], batch_size: int = 32) -> List[Document]:
         """Score each (query, doc) pair, filter by threshold, sort by score descending."""
         pairs  = [(query, doc.page_content) for doc in docs]
-        scores = self._model.compute_score(pairs, normalize=True)
+        scores = self._model.compute_score(pairs, normalize=True, batch_size=batch_size)
 
         results = []
         for doc, score in zip(docs, scores):

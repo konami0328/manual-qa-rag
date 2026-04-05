@@ -169,5 +169,65 @@ Score the following question-answer pair based on the source document.
 
 # 3. Expand
 ```
+# expand.py
 
+"""
+Input:  qa_filtered.jsonl (source_chunk_id, page, question, answer, score, reason)
+Output: qa_expand.jsonl (source_chunk_id, page, question, answer, paraphrases)
+
+Dependencies: openai, python-dotenv
+"""
+
+# --- Config ---
+# MAX_WORKERS  = 20
+# MIN_SCORE    = 3
+# DEBUG        = True
+# DEBUG_SIZE   = 10
+# FILTER_PATH  = "data/qa_pairs/qa_filtered.jsonl"
+# EXPAND_PATH  = "data/qa_pairs/qa_expand.jsonl"
+
+# --- Prompt ---
+GENERALIZE_PROMPT = """
+Given the question below, generate 5 paraphrases that express the same meaning in different ways.
+
+Requirements:
+- Same intent, different phrasing
+- Conversational tone, explore different ways people would naturally ask this
+
+Output Format (JSON only, no markdown, no preamble):
+["...", "...", "...", "...", "..."]
+
+Question:
+<question>
+{question}
+</question>
+"""
+
+# --- Pipeline ---
+
+# Step 1 — Load qa_filtered.jsonl
+# filter: score >= MIN_SCORE
+# if DEBUG: random sample DEBUG_SIZE entries
+
+# Step 2 — Expand each question (concurrent, checkpoint)
+# def expand_questions(qa_pairs) -> saves to EXPAND_PATH (JSONL)
+#   for each qa: LLM → List[str] of 5 paraphrases
+#   save: {source_chunk_id, page, question, answer, paraphrases}
+#   skip if question already in checkpoint
+
+# --- Main ---
+# def main():
+#   Step 1 → Step 2
+
+# if __name__ == "__main__":
+#   main()
+
+# --- Output format ---
+# {
+#   "source_chunk_id": "...",
+#   "page":            45,
+#   "question":        "...",
+#   "answer":          "...",
+#   "paraphrases":     ["...", "...", "...", "...", "..."]
+# }
 ```
