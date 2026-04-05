@@ -14,7 +14,7 @@ from src.client.mongodb_config import MongoConfig
 load_dotenv()
 
 # --- Config ---
-DEBUG = True
+DEBUG = False
 DEBUG_SIZE = 10
 
 # --- Prompt ---
@@ -29,8 +29,9 @@ Generate 5 realistic question-answer pairs based on the document below. These qu
 - NO meta-questions about document structure or location
 
 **Answer Requirements:**
-- Complete and self-contained (2-4 sentences)
+- Complete and self-contained
 - NO references to other sections or page numbers
+- Based ONLY on the provided document — do not add any information not present in the text
 
 **Output Format (JSON only, no markdown, no preamble):**
 [
@@ -122,13 +123,13 @@ def main():
         for d in col.find()
         if len(d["page_content"].split()) >= MINIMAL_CHUNK_SIZE
     ]
-    print(f"Total chunks after filter: {len(chunks)}")
+    print(f"Total chunks: {len(chunks)}")
 
     if DEBUG:
-        # import random
-        # random.seed(42)
-        # chunks = random.sample(chunks, DEBUG_SIZE)
-        chunks = chunks[:10]
+        import random
+        random.seed(42)
+        chunks = random.sample(chunks, DEBUG_SIZE)
+        # chunks = chunks[:DEBUG_SIZE]
         print(f"DEBUG mode: processing {DEBUG_SIZE} random chunks")
 
     generate_qa(chunks)
