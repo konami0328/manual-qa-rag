@@ -27,6 +27,9 @@ After each change, run `experiments/parse_analysis.py` to dump all chunks to `ex
 
 ---
 
+### Chunk Word Count Distribution
+![Chunk Word Count Distribution](../docs/chunk_length_distribution.png)
+
 ### Issue 4: Chunks Mixing Content from Different Sections
 
 **Problem:**
@@ -100,19 +103,17 @@ BM25-only retrieval surfaces correct results but is purely keyword-based — sem
 
 ```
 query
-  ├── BGE-M3 dense  → top-k ──┐
-  ├── BGE-M3 sparse → top-k ──┤ RRF fusion (internal, Milvus)
-  │                            └──────────────────────────────
-  │                                         ↓
-  │                                  dedup by unique_id
-  │                                         ↓
-  └── BM25          → top-k ────────── union merge
-                                             ↓
-                                    candidate pool (~14-20 chunks)
-                                             ↓
-                                         reranker
-                                             ↓
-                                        LLM generate
+  ├── BGE-M3 dense  ──┐
+  ├── BGE-M3 sparse ──┤ RRF fusion (Milvus internal) → top-k
+  │                   └─────────────────────────────────────────┐
+  │                                                             │ union + dedup
+  └── BM25 ──────────────────────────────────────── top-k ──────┘
+                                                      ↓
+                                               candidate pool
+                                                      ↓
+                                                     reranker
+                                                      ↓
+                                                   LLM generate
 ```
 
 ---
@@ -348,46 +349,42 @@ Each question has exactly one ground truth `unique_id`. Under this condition, Re
 ---
  
 ### k sweep
- 
-`EVAL_K_VALUES = [1, 3, 5, 10]` defined in `config.py`.
- 
-For each retriever: retrieve top-`max(k)=10` once, slice to each k — avoids redundant retrieval calls per question.
- 
-For `Hybrid+Reranker`: retrieve top-10 candidates → rerank → slice to k. Reranker may drop chunks below `RERANKER_THRESHOLD`, so Hit@k at small k may be lower than Hybrid alone — this is expected and meaningful signal about reranker precision.
- 
+
+`EVAL_K_VALUES = [1, 5, 10, 15, 20]` defined in `config.py`.
+
+For each retriever: retrieve top-`max(k)=20` once, slice to each k — avoids redundant retrieval calls per question.
+
+For `Hybrid+Reranker`: retrieve top-20 candidates → rerank → slice to k. Reranker may drop chunks below `RERANKER_THRESHOLD`, so Hit@k at small k may be lower than Hybrid alone — this is expected and meaningful signal about reranker precision.
+
 ---
- 
+
 ### Results (500 samples, DEBUG=True)
- 
-![Retrieval Evaluation](../data/eval/retrieval_results.png)
- 
-| Retriever | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|-----------|-------|-------|-------|--------|-----|
-| BM25 | 0.346 | 0.504 | 0.556 | 0.626 | 0.4385 |
-| BGE | 0.400 | 0.554 | 0.636 | 0.700 | 0.4981 |
-| Hybrid | 0.400 | 0.554 | 0.636 | 0.700 | 0.4981 |
-| Hybrid+Reranker | — | — | — | — | — |
- 
+
+| Retriever | Hit@1 | Hit@5 | Hit@10 | Hit@15 | Hit@20 | MRR |
+|-----------|-------|-------|--------|--------|--------|-----|
+| BM25 | 0.454 | 0.732 | 0.826 | 0.850 | 0.874 | 0.5777 |
+| BGE | 0.486 | 0.814 | 0.880 | 0.928 | 0.944 | 0.6263 |
+| Hybrid | 0.486 | 0.814 | 0.880 | 0.928 | 0.944 | 0.6263 |
+| Hybrid+Reranker | — | — | — | — | — | — |
+
 Hybrid+Reranker skipped — cross-encoder requires GPU for practical eval speed (CPU: ~hours for 500 samples × 20 pairs). To be evaluated on GPU.
- 
+
 ---
- 
+
 ### Findings
- 
-**BGE vs BM25:** BGE improves Hit@10 by +0.074 (0.626 → 0.700) and MRR by +0.060 (0.4385 → 0.4981). Semantic retrieval meaningfully outperforms keyword matching.
- 
-**Hybrid = BGE:** BM25 union added zero new chunks to the candidate pool at `max_k=10`. BGE sparse already covers BM25's lexical matching — union dedup removed all BM25-only results. The cross-page split edge case (page 46, "shoulder anchor" query) was validated manually but does not show up as a measurable improvement at this scale.
- 
-**Recall ceiling is the bottleneck:** Hit@10 = 0.700 means 30% of queries fail to surface the correct chunk within top-10. Reranker operates on the candidate pool and cannot recover these misses — improving reranker ordering will not address the root problem. The bottleneck is retrieval recall, not ranking quality.
- 
+
+**BGE vs BM25:** BGE improves Hit@10 by +0.054 (0.826 → 0.880) and MRR by +0.049 (0.5777 → 0.6263). Semantic retrieval meaningfully outperforms keyword matching across all k values.
+
+**Hybrid = BGE:** BM25 union added zero new chunks to the candidate pool at any k. BGE sparse covers BM25's lexical matching — union dedup removed all BM25-only results. BM25 union is redundant at the current setting.
+
+**Bottleneck is ranking, not recall:** BGE Hit@20 = 0.944 means the correct chunk exists in the top-20 for ~94% of queries. The gap between Hit@10 (0.880) and Hit@20 (0.944) is +0.064 — correct chunks are present but ranked 11-20. This is a ranking problem, not a recall problem. Reranker with TOPK=20 is the most direct path to closing this gap.
+
 ---
- 
-### Next Steps -- Error Analysis
- 
+
+### Next Steps
+
 | Priority | Action | Reason |
 |----------|--------|--------|
-| 1 | Evaluate Hit@20 / Hit@30 | Determine whether correct chunks exist deeper in the ranking or are truly missed |
-| 2 | Analyze failure cases | Identify whether misses are due to query-chunk vocabulary gap, cross-page splits, or chunk quality |
-| 3 | Improve recall | Based on failure analysis — candidates: larger TOPK, query expansion, fix Issue 5 |
-| 4 | Eval Hybrid+Reranker on GPU | Complete the comparison once recall is improved |
- 
+| 1 | Eval Hybrid+Reranker on GPU with TOPK=20 | Correct chunks exist at rank 11-20; reranker can surface them |
+| 2 | Analyze remaining Hit@20 miss cases | ~6% of queries still miss at k=20; identify root cause |
+| 3 | Decide on BM25 union | Currently redundant — remove or keep as safety net |
