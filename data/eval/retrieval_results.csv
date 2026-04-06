@@ -9,8 +9,8 @@ BGE,5,0.814,0.6263
 BGE,10,0.88,0.6263
 BGE,15,0.928,0.6263
 BGE,20,0.944,0.6263
-Hybrid,1,0.486,0.6263
-Hybrid,5,0.814,0.6263
-Hybrid,10,0.88,0.6263
-Hybrid,15,0.928,0.6263
-Hybrid,20,0.944,0.6263
+Hybrid+Reranker,1,0.63,0.7406
+Hybrid+Reranker,5,0.87,0.7406
+Hybrid+Reranker,10,0.936,0.7406
+Hybrid+Reranker,15,0.948,0.7406
+Hybrid+Reranker,20,0.956,0.7406

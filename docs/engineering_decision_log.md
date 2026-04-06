@@ -174,7 +174,7 @@ Hybrid retrieval returns ~14-20 candidates including irrelevant chunks that shar
 ### Architecture
 
 ```
-~14-20 candidates from HybridRetriever
+~20 candidates from HybridRetriever
   ↓
 FlagReranker — score each (query, chunk) pair
   ↓
@@ -197,7 +197,6 @@ RRF scores are rank-derived (`1/(60+rank)`) — not interpretable as relevance t
 
 - Cross-encoder, same BAAI family as bge-m3
 - Input: `(query, passage)` pairs → single relevance score
-- Fast (~0.1-0.5s for 14 chunks), deterministic
 - `normalize=True`: maps raw scores to `[0, 1]` for interpretable thresholding
 - Score stored in `metadata["rerank_score"]` for debugging
 
@@ -305,24 +304,7 @@ Page 46 step 4 chunk (~130 chars) passes the length filter but is context-depend
  
 ### Overview
  
-Systematic comparison of all four retriever configurations on the test set to identify the best-performing pipeline before optimizing generation.
- 
----
- 
-### Architecture
- 
-```
-test.jsonl  →  {question, unique_id}
-                      ↓
-         ┌────────────┼────────────┬─────────────────┐
-         ↓            ↓            ↓                 ↓
-        BM25         BGE        Hybrid        Hybrid+Reranker
-         └────────────┴────────────┴─────────────────┘
-                      ↓
-               Hit@k + MRR
-                      ↓
-          data/eval/retrieval_results.csv
-```
+Systematic comparison of all three retriever configurations on the test set to identify the best-performing pipeline before optimizing generation.
  
 ---
  
@@ -332,7 +314,6 @@ test.jsonl  →  {question, unique_id}
 |------|-------------|
 | BM25 | Keyword-based baseline |
 | BGE | Dense + sparse RRF internally via Milvus |
-| Hybrid | BGE + BM25 union, dedup by unique_id |
 | Hybrid+Reranker | Hybrid candidates reranked by `bge-reranker-v2-m3`, treated as ranked list |
  
 ---
@@ -358,16 +339,17 @@ For `Hybrid+Reranker`: retrieve top-20 candidates → rerank → slice to k. Rer
 
 ---
 
-### Results (500 samples, DEBUG=True)
+### Results (500 samples)
 
 | Retriever | Hit@1 | Hit@5 | Hit@10 | Hit@15 | Hit@20 | MRR |
 |-----------|-------|-------|--------|--------|--------|-----|
 | BM25 | 0.454 | 0.732 | 0.826 | 0.850 | 0.874 | 0.5777 |
 | BGE | 0.486 | 0.814 | 0.880 | 0.928 | 0.944 | 0.6263 |
-| Hybrid | 0.486 | 0.814 | 0.880 | 0.928 | 0.944 | 0.6263 |
-| Hybrid+Reranker | — | — | — | — | — | — |
+| Hybrid+Reranker | 0.630 | 0.870 | 0.936 | 0.948 | 0.956 | 0.7406 |
 
-Hybrid+Reranker skipped — cross-encoder requires GPU for practical eval speed (CPU: ~hours for 500 samples × 20 pairs). To be evaluated on GPU.
+![Retrieval Results Plot](../data/eval/retrieval_results.png)
+
+Hybrid+Reranker evaluated with `RERANKER_THRESHOLD=0.0` — threshold filtering disabled to measure pure ranking quality. In inference, a calibrated threshold will be applied to drop irrelevant chunks before generation; threshold should be re-calibrated after reranker fine-tuning as score distributions will shift.
 
 ---
 
@@ -375,9 +357,9 @@ Hybrid+Reranker skipped — cross-encoder requires GPU for practical eval speed 
 
 **BGE vs BM25:** BGE improves Hit@10 by +0.054 (0.826 → 0.880) and MRR by +0.049 (0.5777 → 0.6263). Semantic retrieval meaningfully outperforms keyword matching across all k values.
 
-**Hybrid = BGE:** BM25 union added zero new chunks to the candidate pool at any k. BGE sparse covers BM25's lexical matching — union dedup removed all BM25-only results. BM25 union is redundant at the current setting.
+**Reranker significantly improves ranking quality:** Hybrid+Reranker Hit@1 jumps to 0.630 (+0.144 over Hybrid), MRR to 0.7406 (+0.114). Hit@10 reaches 0.936, Hit@20 reaches 0.956, meeting the target of 0.95+. The reranker effectively surfaces correct chunks from rank 11-20 into the top-10.
 
-**Bottleneck is ranking, not recall:** BGE Hit@20 = 0.944 means the correct chunk exists in the top-20 for ~94% of queries. The gap between Hit@10 (0.880) and Hit@20 (0.944) is +0.064 — correct chunks are present but ranked 11-20. This is a ranking problem, not a recall problem. Reranker with TOPK=20 is the most direct path to closing this gap.
+**Bottleneck shifts to fine-tuning:** With TOPK=20 and the off-the-shelf reranker, Hit@10=0.936 is the current ceiling. Fine-tuning the reranker on domain-specific data is expected to push Hit@10 to 0.95+, reducing reliance on TOPK=20.
 
 ---
 
@@ -385,6 +367,7 @@ Hybrid+Reranker skipped — cross-encoder requires GPU for practical eval speed 
 
 | Priority | Action | Reason |
 |----------|--------|--------|
-| 1 | Eval Hybrid+Reranker on GPU with TOPK=20 | Correct chunks exist at rank 11-20; reranker can surface them |
-| 2 | Analyze remaining Hit@20 miss cases | ~6% of queries still miss at k=20; identify root cause |
-| 3 | Decide on BM25 union | Currently redundant — remove or keep as safety net |
+| 1 | Generate reranker training data | Three-class labels (positive/weak positive/negative) from existing QA pairs |
+| 2 | Fine-tune reranker | Expected to push Hit@10 to 0.95+, reducing TOPK requirement from 20 to 10 |
+| 3 | Re-calibrate RERANKER_THRESHOLD | Score distributions shift after fine-tuning; threshold needs re-validation |
+| 4 | Analyze remaining Hit@20 miss cases | ~4% of queries still miss at k=20; identify root cause |

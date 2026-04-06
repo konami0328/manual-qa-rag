@@ -21,6 +21,7 @@ class HybridRetriever:
         bge_results  = self.bge.retrieve_topk(query, topk)
         bm25_results = self.bm25.retrieve_topk(query, topk)
 
+        # dedup
         seen = set()
         candidates = []
         for doc in bge_results + bm25_results:

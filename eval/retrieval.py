@@ -247,7 +247,7 @@ def main():
         print(f"DEBUG mode: using {len(samples)} positive samples")
 
     print("Loading docs from MongoDB...")
-    docs        = load_docs()
+    docs         = load_docs()
     chunk_lookup = build_chunk_lookup(docs)
     print(f"Docs loaded: {len(docs)}")
 
@@ -257,9 +257,8 @@ def main():
     hybrid   = HybridRetriever(docs)
     reranker = Reranker()
 
-    def bm25_fn(q):   return bm25.retrieve_topk(q, topk=max_k)
-    def bge_fn(q):    return bge.retrieve_topk(q, topk=max_k)
-    def hybrid_fn(q): return hybrid.retrieve(q, topk=max_k)
+    def bm25_fn(q): return bm25.retrieve_topk(q, topk=max_k)
+    def bge_fn(q):  return bge.retrieve_topk(q, topk=max_k)
     def hybrid_reranker_fn(q):
         candidates = hybrid.retrieve(q, topk=max_k)
         return reranker.rerank(q, candidates, batch_size=RERANKER_BATCH)
@@ -267,7 +266,6 @@ def main():
     retrievers = [
         ("BM25",            bm25_fn),
         ("BGE",             bge_fn),
-        ("Hybrid",          hybrid_fn),
         ("Hybrid+Reranker", hybrid_reranker_fn),
     ]
 
