@@ -30,7 +30,7 @@ from src.reranker.rerank_bge import Reranker
 # Config
 # ---------------------------------------------------------------------------
 
-DEBUG          = True
+DEBUG          = False
 DEBUG_SIZE     = 500
 RERANKER_BATCH = 32
 BAD_CASE_DIR   = os.path.join(os.path.dirname(EVAL_RETRIEVAL_PATH))

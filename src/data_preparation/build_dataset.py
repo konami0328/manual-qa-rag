@@ -14,20 +14,31 @@ random.seed(42)
 
 
 def _load_expanded() -> list[dict]:
-    """Load qa_expand.jsonl, flatten original + paraphrases into individual QA pairs."""
-    qa_pairs = []
+    """
+    Load qa_expand.jsonl as items (one item = one original question + its paraphrases).
+    Do NOT flatten here — flattening happens after split to prevent paraphrase leakage
+    across train/val/test sets.
+    """
+    items = []
     with open(EXPAND_PATH) as f:
         for line in f:
-            item = json.loads(line)
-            all_questions = [item["question"]] + item["paraphrases"]
-            for q in all_questions:
-                qa_pairs.append({
-                    "unique_id":       hashlib.md5(q.encode()).hexdigest(),
-                    "question":        q,
-                    "answer":          item["answer"],
-                    "source_chunk_id": item["source_chunk_id"],
-                    "page":            item["page"],
-                })
+            items.append(json.loads(line))
+    return items
+
+
+def _flatten(items: list[dict]) -> list[dict]:
+    """Flatten items into individual QA pairs (original question + paraphrases)."""
+    qa_pairs = []
+    for item in items:
+        all_questions = [item["question"]] + item["paraphrases"]
+        for q in all_questions:
+            qa_pairs.append({
+                "unique_id":       hashlib.md5(q.encode()).hexdigest(),
+                "question":        q,
+                "answer":          item["answer"],
+                "source_chunk_id": item["source_chunk_id"],
+                "page":            item["page"],
+            })
     return qa_pairs
 
 
@@ -48,8 +59,21 @@ def _load_negatives(n: int) -> list[dict]:
     ]
 
 
-def _split(items: list[dict]) -> tuple[list, list, list]:
-    """Split items into train/val/test by TRAIN_RATIO:VAL_RATIO:rest."""
+def _split_items(items: list[dict]) -> tuple[list, list, list]:
+    """
+    Split at the item level (before flattening) to ensure all paraphrases of the same
+    original question land in the same split. Splitting after flatten would cause
+    paraphrase leakage, inflating val/test scores.
+    """
+    random.shuffle(items)
+    n         = len(items)
+    train_end = int(n * TRAIN_RATIO)
+    val_end   = int(n * (TRAIN_RATIO + VAL_RATIO))
+    return items[:train_end], items[train_end:val_end], items[val_end:]
+
+
+def _split_negatives(items: list[dict]) -> tuple[list, list, list]:
+    """MS MARCO negatives have no paraphrases — simple random split is safe."""
     random.shuffle(items)
     n         = len(items)
     train_end = int(n * TRAIN_RATIO)
@@ -64,14 +88,20 @@ def _save(items: list[dict], path: str) -> None:
             f.write(json.dumps(item) + "\n")
 
 
-def build_dataset(qa_pairs: list[dict], negatives: list[dict]) -> None:
-    """Split positives and negatives, merge, shuffle, save to JSONL."""
-    pos_train, pos_val, pos_test = _split(qa_pairs)
-    neg_train, neg_val, neg_test = _split(negatives)
+def build_dataset(items: list[dict], negatives: list[dict]) -> None:
+    # split at item level before flattening
+    train_items, val_items, test_items = _split_items(items)
 
-    train = pos_train + neg_train
-    val   = pos_val   + neg_val
-    test  = pos_test  + neg_test
+    # flatten each split independently — paraphrases stay within their split
+    train_pos = _flatten(train_items)
+    val_pos   = _flatten(val_items)
+    test_pos  = _flatten(test_items)
+
+    neg_train, neg_val, neg_test = _split_negatives(negatives)
+
+    train = train_pos + neg_train
+    val   = val_pos   + neg_val
+    test  = test_pos  + neg_test
 
     random.shuffle(train)
     random.shuffle(val)
@@ -82,7 +112,7 @@ def build_dataset(qa_pairs: list[dict], negatives: list[dict]) -> None:
     _save(test,  TEST_PATH)
 
     print(f"\n{'='*40}")
-    print(f"Positives  : {len(qa_pairs)} → train {len(pos_train)} / val {len(pos_val)} / test {len(pos_test)}")
+    print(f"Positives  : {len(items)} items → train {len(train_pos)} / val {len(val_pos)} / test {len(test_pos)} (after flatten)")
     print(f"Negatives  : {len(negatives)} → train {len(neg_train)} / val {len(neg_val)} / test {len(neg_test)}")
     print(f"Train total: {len(train)}")
     print(f"Val total  : {len(val)}")
@@ -92,11 +122,11 @@ def build_dataset(qa_pairs: list[dict], negatives: list[dict]) -> None:
 
 
 def main():
-    qa_pairs  = _load_expanded()
-    print(f"Total QA pairs (after flatten): {len(qa_pairs)}")
+    items     = _load_expanded()
+    print(f"Total items (original questions): {len(items)}")
 
     negatives = _load_negatives(NEGATIVE_COUNT)
-    build_dataset(qa_pairs, negatives)
+    build_dataset(items, negatives)
 
 
 if __name__ == "__main__":

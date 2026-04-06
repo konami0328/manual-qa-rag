@@ -58,6 +58,18 @@ After each change, run `experiments/parse_analysis.py` to dump all chunks to `ex
 ```
 load_pdf() → llm_clean_and_split() → pickle → split on <<<SPLIT>>> → save() → MongoDB
 ```
+### Metadata Addition: chunk_index
+
+Added `chunk_index` (global, zero-based, continuous across pages) to each chunk's metadata at index time.
+
+**Reason:** Required for reranker fine-tuning — when mining hard negatives, chunks adjacent to the
+ground truth (chunk_index distance ≤ 1) must be excluded regardless of page boundary. Page number
+alone cannot identify adjacent chunks accurately: two chunks on different pages may be content-
+continuous (cross-page split, Issue 5), and two chunks on the same page may be semantically
+unrelated. chunk_index is the only reliable proximity signal.
+
+**Impact:** chunk_index.py rerun required. QA dataset unaffected — unique_id is md5(page_content)
+and does not depend on metadata.
 
 ---
 
@@ -221,7 +233,7 @@ Page 46 is a short incomplete chunk (step 4 only). Its rerank score (`0.23`) is 
 | Qwen3-Reranker-4B | Heavier (4B), slower; cross-encoder sufficient for current query set. Revisit for complex/multi-faceted queries |
 | Query decomposition | Multi-faceted queries ("how to adjust X and Y") degrade retrieval + reranking. Implement if such queries appear in eval set |
 | WeightedRanker sparse:dense ratio | No eval data yet to justify tuning |
-| Finetune RERANKER_THRESHOLD | Blocked by Issue 5 — page 46 fragile at current threshold |
+| Finetune RERANKER_THRESHOLD | Blocked by Issue 5 — e.g., page 46 fragile at current threshold |
 
 ---
 
@@ -300,6 +312,35 @@ Page 46 step 4 chunk (~130 chars) passes the length filter but is context-depend
 
 ---
 
+### Pipeline: expand.py
+
+- Load qa_filtered.jsonl, keep only score >= MIN_SCORE
+- For each QA pair: LLM generates 3 paraphrases of the original question
+- Concurrent LLM calls via ThreadPoolExecutor(MAX_WORKERS)
+- Checkpoint by question — safe to resume after interruption
+- Output: data/qa_pairs/qa_expand.jsonl — {source_chunk_id, page, question, answer, paraphrases}
+
+**Why paraphrases:** A single phrasing of a question does not reflect the diversity of how real
+users ask the same thing. Expanding each question with 3 paraphrases triples the effective
+training set size and improves retriever/reranker robustness to query variation.
+
+---
+
+### Fix: Paraphrase Leakage in Train/Val/Test Split
+
+**Problem:**
+Original build_dataset.py flattened all paraphrases into individual samples first, then split
+randomly. This caused paraphrases of the same original question to appear in different splits.
+Since paraphrases are semantically near-identical, val/test scores were inflated — the model
+had effectively seen the question during training.
+
+**Fix:**
+Split at the item level (one item = one original question + its paraphrases) before flattening.
+Each item is assigned to exactly one split; flattening happens independently within each split.
+MS MARCO negatives have no paraphrases and are split randomly as before.
+
+---
+
 ## 6. Retrieval Evaluation
  
 ### Overview
@@ -339,7 +380,7 @@ For `Hybrid+Reranker`: retrieve top-20 candidates → rerank → slice to k. Rer
 
 ---
 
-### Results (500 samples)
+### Results (500 samples) -- NEED RERUN!!!
 
 | Retriever | Hit@1 | Hit@5 | Hit@10 | Hit@15 | Hit@20 | MRR |
 |-----------|-------|-------|--------|--------|--------|-----|
@@ -371,3 +412,95 @@ Hybrid+Reranker evaluated with `RERANKER_THRESHOLD=0.0` — threshold filtering 
 | 2 | Fine-tune reranker | Expected to push Hit@10 to 0.95+, reducing TOPK requirement from 20 to 10 |
 | 3 | Re-calibrate RERANKER_THRESHOLD | Score distributions shift after fine-tuning; threshold needs re-validation |
 | 4 | Analyze remaining Hit@20 miss cases | ~4% of queries still miss at k=20; identify root cause |
+
+---
+
+## 7. Reranker Fine-tuning
+
+### Motivation
+
+Off-the-shelf bge-reranker-v2-m3 achieves Hit@10=0.936, MRR=0.74. The remaining ~6% miss cases
+are ranking failures — the correct chunk is in the candidate pool but ranked below irrelevant
+chunks. Domain-specific fine-tuning is expected to push Hit@10 to 0.95+ and improve MRR.
+
+---
+
+### Training Objective
+
+**Pointwise MSE** — input: (query, chunk) pair → output: single relevance score.
+
+**Why not pairwise:** Pairwise BCE is strictly binary (positive/negative). Our label design
+includes a weak-positive tier which carries meaningful signal — pointwise MSE can directly
+supervise this graded relevance. Pairwise would discard the intermediate tier.
+
+**Why not listwise:** Listwise optimizes the full ranked list jointly and theoretically aligns
+best with MRR/NDCG. However, at our data scale (12k QA pairs) and corpus size (1000+ chunks),
+listwise offers marginal gains over pointwise while significantly increasing implementation
+complexity.
+
+**Label design:**
+
+| Sample | Source | Label |
+|--------|--------|-------|
+| Positive | ground truth chunk | 1.0 |
+| Weak positive | rank 2-5 (after filter) | 0.5 |
+| Negative | rank 6-10 (after filter) | 0.0 |
+
+Labels are continuous values — MSE trains the model to output scores that reflect graded
+relevance. Score ordering (positive > weak positive > negative) is what matters; absolute
+score values are not meaningful until threshold recalibration after fine-tuning.
+
+---
+
+### Hard Negative Mining
+
+**Retriever:** HybridRetriever (no reranker) — top-10 candidates per query.
+
+**Adjacency filter:** Chunks with `abs(retrieved_chunk_index - gt_chunk_index) <= 1` are
+excluded from weak positive and negative sampling. This removes content-continuous neighbors
+regardless of page boundary — both same-page adjacent chunks and cross-page splits are
+covered. Filtering by page number alone is insufficient (adjacent pages may be unrelated;
+same-page chunks may be content-continuous).
+
+**Sampling:**
+- Weak positive: randomly sample 1 from rank 2-5 (after filter)
+- Negative: randomly sample 1 from rank 6-10 (after filter)
+- Each query produces 3 training samples total
+
+**Data leakage prevention:** Hard negative mining uses only train+val queries. Test set
+queries are excluded entirely.
+
+---
+
+### Training Design
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Base model | bge-reranker-v2-m3 | Consistent with inference pipeline; strong domain-general baseline |
+| PEFT | LoRA | Reduces overfitting risk on small domain corpus; lower memory; friendlier for subsequent quantization |
+| Loss | MSE | Directly supervises graded relevance labels |
+| Framework | Custom PyTorch + HuggingFace Transformers | FlagEmbedding's native reranker fine-tuning script only supports binary BCE; MSE with three-tier labels requires custom training loop |
+
+**Training hyperparameters:** To be determined empirically during training runs.
+
+---
+
+### Evaluation
+
+**Metrics:**
+- Val MSE loss — monitors training convergence
+- Val Hit@k — directly measures ranking quality improvement; primary signal for model selection
+
+**Early stopping:** Deferred — to be decided during training.
+
+**Baseline:** Retrieval eval results post-leakage fix (Section 6, pending rerun).
+
+---
+
+### Decisions Deferred
+
+| Decision | Reason |
+|----------|--------|
+| RERANKER_THRESHOLD recalibration | Score distributions shift after fine-tuning; recalibrate after training is complete |
+| Early stopping strategy | Deferred to training phase |
+| Qwen3-Reranker-4B | Heavier model; revisit only if fine-tuned bge-reranker-v2-m3 does not meet Hit@10 target |

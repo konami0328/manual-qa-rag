@@ -19,6 +19,7 @@ SPLIT_DELIMITER = "<<<SPLIT>>>"
 def split_chunks(clean_docs: List[Document]) -> List[Document]:
     """Split each cleaned page by SPLIT_DELIMITER inserted by LLM."""
     all_chunks = []
+    chunk_index = 0                                          # global counter
     for doc in tqdm(clean_docs, desc="Splitting chunks"):
         parts = [p.strip() for p in doc.page_content.split(SPLIT_DELIMITER) if p.strip()]
         for part in parts:
@@ -26,10 +27,12 @@ def split_chunks(clean_docs: List[Document]) -> List[Document]:
                 page_content=part,
                 metadata={
                     **doc.metadata,
-                    "unique_id": hashlib.md5(part.encode()).hexdigest(),
+                    "unique_id":   hashlib.md5(part.encode()).hexdigest(),
+                    "chunk_index": chunk_index,              # added
                 },
             )
             all_chunks.append(chunk_doc)
+            chunk_index += 1                                 # increment per chunk
     return all_chunks
 
 

@@ -14,6 +14,7 @@ data/
 !data/eval/
 !data/eval/*
 
+experiments/
 test.py
 plot.py
 *.txt

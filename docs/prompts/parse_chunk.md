@@ -40,46 +40,35 @@ chunk_index.py
 Input:  cleaned List[Document] from pickle (CLEAN_DOCS_PATH)
 Output: chunked Documents saved to MongoDB (manual_text collection)
 
-Dependencies: langchain, pymongo, sentence-transformers
+Dependencies: langchain, pymongo
 """
 
 # --- Config (config.py) ---
-# CLEAN_DOCS_PATH      = os.path.join(ROOT, "data", "clean_docs.pkl")
-# EMBEDDING_MODEL_PATH = "models/BAAI/bge-m3"
-# BREAKPOINT_PERCENTILE = 75                    # lower percentile = more splits
-# MAX_CHUNKS_PER_PAGE   = 5
+# CLEAN_DOCS_PATH = os.path.join(ROOT, "data", "clean_docs.pkl")
 
 # --- Data Model (src/fields/manual_info.py) ---
 # class ManualInfo(BaseModel):
 #     unique_id:    str                         # md5(page_content)
 #     page_content: Optional[str]
-#     metadata:     dict                        # {source: str, page: int}
+#     metadata:     dict                        # {source: str, page: int, chunk_index: int}
 
 # --- Pipeline ---
 
-def semantic_chunk(clean_docs: List[Document]) -> List[Document]:
+def split_chunks(clean_docs: List[Document]) -> List[Document]:
     """
-    For each page:
-    1. Split by \n\n into paragraphs
-    2. Compute embedding similarity between adjacent paragraphs (bge-m3)
-    3. Split at low-similarity boundaries (below percentile threshold)
-    4. If chunks > MAX_CHUNKS_PER_PAGE, merge most similar neighbors
-    5. Assign unique_id = md5(page_content) to each chunk
-    
-    Returns: List[Document] with metadata inherited from original page
+    Split each page by <<<SPLIT>>> delimiter inserted by LLM.
+    Assign unique_id = md5(page_content) and chunk_index (global, continuous across pages).
     """
     pass
 
 def save(chunks: List[Document]) -> None:
     """
-    Validate via ManualInfo, upsert to MongoDB by unique_id
-    Skip on validation failure
+    Validate via ManualInfo, upsert to MongoDB by unique_id.
     """
     pass
 
 def main():
     clean_docs = pickle.load(open(CLEAN_DOCS_PATH, "rb"))
-    chunks     = semantic_chunk(clean_docs)
+    chunks     = split_chunks(clean_docs)
     save(chunks)
-    print(f"Saved {len(chunks)} chunks to MongoDB")
 ```

@@ -86,7 +86,7 @@ def _load_qa_pairs() -> list[dict]:
 
 
 def expand_questions(qa_pairs: list[dict]) -> None:
-    """Expand each question with 5 paraphrases, save to EXPAND_PATH (JSONL)."""
+    """Expand each question with 3 paraphrases, save to EXPAND_PATH (JSONL)."""
     seen      = _load_checkpoint()
     file_lock = threading.Lock()
 
