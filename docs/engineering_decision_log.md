@@ -380,15 +380,13 @@ For `Hybrid+Reranker`: retrieve top-20 candidates → rerank → slice to k. Rer
 
 ---
 
-### Results (500 samples) -- NEED RERUN!!!
+### Results (500 samples)  
 
 | Retriever | Hit@1 | Hit@5 | Hit@10 | Hit@15 | Hit@20 | MRR |
 |-----------|-------|-------|--------|--------|--------|-----|
-| BM25 | 0.454 | 0.732 | 0.826 | 0.850 | 0.874 | 0.5777 |
-| BGE | 0.486 | 0.814 | 0.880 | 0.928 | 0.944 | 0.6263 |
-| Hybrid+Reranker | 0.630 | 0.870 | 0.936 | 0.948 | 0.956 | 0.7406 |
-
-![Retrieval Results Plot](../data/eval/retrieval_results.png)
+| BM25 | 0.4373 | 0.7407 | 0.8139 | 0.8480 | 0.8610 | 0.5687 |
+| BGE | 0.5130 | 0.8213 | 0.8834 | 0.9212 | 0.9386 | 0.6467 |
+| Hybrid+Reranker | 0.6346 | 0.9057 | 0.9485 | 0.9578 | 0.9634 | 0.7522 |
 
 Hybrid+Reranker evaluated with `RERANKER_THRESHOLD=0.0` — threshold filtering disabled to measure pure ranking quality. In inference, a calibrated threshold will be applied to drop irrelevant chunks before generation; threshold should be re-calibrated after reranker fine-tuning as score distributions will shift.
 
@@ -419,81 +417,146 @@ Hybrid+Reranker evaluated with `RERANKER_THRESHOLD=0.0` — threshold filtering 
 
 ### Motivation
 
-Off-the-shelf bge-reranker-v2-m3 achieves Hit@10=0.936, MRR=0.74. The remaining ~6% miss cases
+Off-the-shelf bge-reranker-v2-m3 achieves Hit@10=0.9485, MRR=0.7522. The remaining miss cases
 are ranking failures — the correct chunk is in the candidate pool but ranked below irrelevant
-chunks. Domain-specific fine-tuning is expected to push Hit@10 to 0.95+ and improve MRR.
+chunks. Domain-specific fine-tuning is expected to improve Hit@1 and MRR, pushing the correct
+chunk closer to rank 1.
 
 ---
 
-### Training Objective
+### Training Data: Hard Negative Mining (`mine.py`)
 
-**Pointwise MSE** — input: (query, chunk) pair → output: single relevance score.
+**Pipeline:**
+```
+train.jsonl / val.jsonl  (positives only, source_chunk_id != None)
+    ↓
+HybridRetriever (topk=20) → FinetunedReranker (threshold=0.0) → ranked list
+    ↓
+adjacency filter: exclude abs(candidate.chunk_index - gt.chunk_index) <= 1
+    ↓
+weak_pos pool = filtered rank 2-5  → sample 1
+neg pool      = filtered rank 6-10 → sample 1
+    ↓
+emit 3 samples per query: (query, gt, 1.0), (query, weak_pos, 0.5), (query, neg, 0.0)
+```
 
-**Why not pairwise:** Pairwise BCE is strictly binary (positive/negative). Our label design
-includes a weak-positive tier which carries meaningful signal — pointwise MSE can directly
-supervise this graded relevance. Pairwise would discard the intermediate tier.
+**Why HybridRetriever + Reranker for mining:**
+The rank window (2-5 for weak positive, 6-10 for negative) is only meaningful if candidates
+are sorted by relevance. HybridRetriever output is not relevance-ranked (BGE results first,
+BM25 appended). Running the reranker gives a meaningful ranked list before sampling.
+Using the current reranker's output to generate training data introduces exposure bias, but
+its effect is limited at this corpus scale — the ground truth label always comes from the QA
+dataset, not from the reranker.
 
-**Why not listwise:** Listwise optimizes the full ranked list jointly and theoretically aligns
-best with MRR/NDCG. However, at our data scale (12k QA pairs) and corpus size (1000+ chunks),
-listwise offers marginal gains over pointwise while significantly increasing implementation
-complexity.
+**Adjacency filter uses chunk_index, not page:**
+Cross-page splits mean adjacent chunks may be on different pages. chunk_index is the only
+reliable proximity signal across page boundaries.
 
-**Label design:**
+**MINE_TOPK=20:**
+Fetching 20 candidates (instead of 10) ensures the neg pool (rank 6-10) remains non-empty
+after adjacency filtering removes ground truth and its neighbors.
 
-| Sample | Source | Label |
-|--------|--------|-------|
-| Positive | ground truth chunk | 1.0 |
-| Weak positive | rank 2-5 (after filter) | 0.5 |
-| Negative | rank 6-10 (after filter) | 0.0 |
-
-Labels are continuous values — MSE trains the model to output scores that reflect graded
-relevance. Score ordering (positive > weak positive > negative) is what matters; absolute
-score values are not meaningful until threshold recalibration after fine-tuning.
-
----
-
-### Hard Negative Mining
-
-**Retriever:** HybridRetriever (no reranker) — top-10 candidates per query.
-
-**Adjacency filter:** Chunks with `abs(retrieved_chunk_index - gt_chunk_index) <= 1` are
-excluded from weak positive and negative sampling. This removes content-continuous neighbors
-regardless of page boundary — both same-page adjacent chunks and cross-page splits are
-covered. Filtering by page number alone is insufficient (adjacent pages may be unrelated;
-same-page chunks may be content-continuous).
-
-**Sampling:**
-- Weak positive: randomly sample 1 from rank 2-5 (after filter)
-- Negative: randomly sample 1 from rank 6-10 (after filter)
-- Each query produces 3 training samples total
-
-**Data leakage prevention:** Hard negative mining uses only train+val queries. Test set
-queries are excluded entirely.
+**Dataset size:**
+- Train triplets: 11,264 → 33,792 flat samples (×3)
+- Val triplets:   3,216  →  9,648 flat samples (×3)
 
 ---
 
-### Training Design
+### Dataset (`dataset.py`)
+
+Each triplet is flattened into 3 samples in fixed order:
+- `(query, pos_chunk,      1.0)`
+- `(query, weak_pos_chunk, 0.5)`
+- `(query, neg_chunk,      0.0)`
+
+Tokenization: `AutoTokenizer` with `text_pair`, `MAX_LENGTH=768`.
+
+**Why MAX_LENGTH=768:**
+Chunk token length distribution: max=1053, P99=686, P95=477, avg=183.
+768 covers P99 (686) plus query (~50 tokens) and special tokens, with minimal truncation.
+
+---
+
+### Training Design (`train.py`)
 
 | Decision | Choice | Reason |
 |----------|--------|--------|
-| Base model | bge-reranker-v2-m3 | Consistent with inference pipeline; strong domain-general baseline |
-| PEFT | LoRA | Reduces overfitting risk on small domain corpus; lower memory; friendlier for subsequent quantization |
-| Loss | MSE | Directly supervises graded relevance labels |
-| Framework | Custom PyTorch + HuggingFace Transformers | FlagEmbedding's native reranker fine-tuning script only supports binary BCE; MSE with three-tier labels requires custom training loop |
+| Base model | bge-reranker-v2-m3 | Consistent with inference pipeline |
+| PEFT | LoRA (r=16, alpha=32, dropout=0.1) | Reduces overfitting on small domain corpus |
+| Loss | MSE | Directly supervises graded relevance labels (1.0 / 0.5 / 0.0) |
+| dtype | bfloat16 | Same exponent range as float32; avoids fp16 overflow during training |
+| Optimizer | AdamW | Standard for transformer fine-tuning |
+| LR | 2e-4 | Standard LoRA starting point |
+| Batch size | 16 | GPU memory limit on RTX 4090 D (24GB); 32 causes OOM |
+| Epochs | 3 | Val loss plateaus after epoch 2; epoch 3 shows slight increase |
 
-**Training hyperparameters:** To be determined empirically during training runs.
+**LoRA target modules:** `["query", "key", "value", "dense"]`
+Covers all attention self layers and FFN dense layers across 24 encoder layers.
+
+**Trainable parameters:**
+```
+trainable params: 8,161,281 || all params: 574,866,433 || trainable%: 1.4197
+```
+
+**Classifier head unfrozen explicitly:**
+After `get_peft_model()`, all non-LoRA parameters are frozen including the classifier head.
+The head must be unfrozen to adapt the output projection to the domain regression task.
+
+**Why pointwise MSE over pairwise BCE:**
+Pairwise BCE is strictly binary (positive/negative). Our three-tier label design includes a
+weak-positive tier (0.5) which carries meaningful signal. MSE directly supervises graded
+relevance; pairwise would discard the intermediate tier.
 
 ---
 
-### Evaluation
+### Logging
 
-**Metrics:**
-- Val MSE loss — monitors training convergence
-- Val Hit@k — directly measures ranking quality improvement; primary signal for model selection
+Single file `train_steps_{timestamp}.jsonl`:
+- Per step (every 50 steps): `{"epoch": int, "step": int, "train_loss": float}`
+- Per epoch: `{"epoch": int, "step": int, "val_loss": float}`
 
-**Early stopping:** Deferred — to be decided during training.
+Val loss logged at the step corresponding to epoch end, enabling aligned plotting of train
+and val loss on the same step axis.
 
-**Baseline:** Retrieval eval results post-leakage fix (Section 6, pending rerun).
+---
+
+### Results
+
+![Training Curve](../docs/reranker_finetune_training_curves.png)
+
+| Epoch | Val Loss |
+|-------|----------|
+| 1 | 0.071616 |
+| 2 | **0.069650** ← best |
+| 3 | 0.070668 |
+
+Best checkpoint: `epoch2_valloss_0.06965`
+
+Train loss curve converges smoothly from ~0.45 to ~0.07 within the first 500 steps, then
+stabilizes. Val loss aligns closely with train loss at epoch end — no significant overfitting.
+
+---
+
+### Retrieval Eval (Post Fine-tuning)
+
+Evaluated on test set using `eval/retrieval/retrieval.py`:
+
+![Retrieval Results Plot](../eval/retrieval/results/retrieval_results.png)
+
+| Retriever | Hit@1 | Hit@5 | Hit@10 | Hit@15 | Hit@20 | MRR |
+|-----------|-------|-------|--------|--------|--------|-----|
+| BM25 | 0.4373 | 0.7407 | 0.8139 | 0.8480 | 0.8610 | 0.5687 |
+| BGE | 0.5130 | 0.8213 | 0.8834 | 0.9212 | 0.9386 | 0.6467 |
+| Hybrid+Reranker | 0.6346 | 0.9057 | 0.9485 | 0.9578 | 0.9634 | 0.7522 |
+| Hybrid+FinetunedReranker | **0.6960** | **0.9280** | **0.9529** | **0.9603** | **0.9628** | **0.7972** |
+
+**Key findings:**
+- Hit@1: +0.0614 (+9.7% relative over baseline Hybrid+Reranker)
+- MRR: +0.0450 (+5.9% relative)
+- Hit@10: +0.0044 (marginal — baseline already high at 0.9485)
+
+Fine-tuning primarily improves ranking precision (correct chunk ranked higher), not recall
+(correct chunk already in candidate pool). This is the expected outcome for reranker fine-tuning.
 
 ---
 
@@ -501,6 +564,4 @@ queries are excluded entirely.
 
 | Decision | Reason |
 |----------|--------|
-| RERANKER_THRESHOLD recalibration | Score distributions shift after fine-tuning; recalibrate after training is complete |
-| Early stopping strategy | Deferred to training phase |
-| Qwen3-Reranker-4B | Heavier model; revisit only if fine-tuned bge-reranker-v2-m3 does not meet Hit@10 target |
+| RERANKER_THRESHOLD calibration | Fine-tuned model outputs raw logits (not normalized); threshold requires empirical calibration against generation quality |

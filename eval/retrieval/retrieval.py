@@ -19,12 +19,15 @@ from typing import List, Tuple
 
 from langchain_core.documents import Document
 
-from config import EVAL_K_VALUES, EVAL_RETRIEVAL_PATH, TEST_PATH
+from config import (
+    EVAL_K_VALUES, EVAL_RETRIEVAL_PATH, TEST_PATH,
+)
 from src.client.mongodb_config import MongoConfig
 from src.retriever.retrieve_bm25 import BM25Retriever
 from src.retriever.retrieve_bge import BGERetriever
 from src.retriever.retrieve_hybrid import HybridRetriever
 from src.reranker.rerank_bge import Reranker
+from src.reranker.rerank_bge_finetuned import FinetunedReranker
 
 # ---------------------------------------------------------------------------
 # Config
@@ -40,11 +43,6 @@ BAD_CASE_DIR   = os.path.join(os.path.dirname(EVAL_RETRIEVAL_PATH))
 # ---------------------------------------------------------------------------
 
 def load_test(path: str) -> Tuple[List[dict], List[dict]]:
-    """
-    Load test.jsonl and split into positive and negative samples.
-    Positive: source_chunk_id is not None (have ground truth chunk)
-    Negative: source_chunk_id is None (MS MARCO negatives, no answer in corpus)
-    """
     positives, negatives = [], []
     with open(path) as f:
         for line in f:
@@ -93,7 +91,6 @@ def wc(text: str) -> int:
 
 
 def open_bad_case_file(name: str, timestamp: str):
-    """Open (or create) the bad case txt file for a retriever, return file handle."""
     os.makedirs(BAD_CASE_DIR, exist_ok=True)
     path = os.path.join(BAD_CASE_DIR, f"bad_cases_{name}_{timestamp}.txt")
     f = open(path, "a", encoding="utf-8")
@@ -104,7 +101,6 @@ def open_bad_case_file(name: str, timestamp: str):
 
 
 def write_bad_case(f, idx: int, sample: dict, gt_doc: Document, results: List[Document], max_k: int):
-    """Write one bad case entry and flush immediately."""
     gt_text = gt_doc.page_content if gt_doc else "[chunk not found in MongoDB]"
     gt_page = gt_doc.metadata.get("page", "?") if gt_doc else "?"
     gt_wc   = wc(gt_text) if gt_doc else 0
@@ -118,10 +114,10 @@ def write_bad_case(f, idx: int, sample: dict, gt_doc: Document, results: List[Do
     f.write(f"TOP-{max_k} RETRIEVED:\n")
 
     for rank, doc in enumerate(results, 1):
-        uid      = doc.metadata.get("unique_id", "?")
-        page     = doc.metadata.get("page", "?")
-        content  = doc.page_content
-        words    = wc(content)
+        uid     = doc.metadata.get("unique_id", "?")
+        page    = doc.metadata.get("page", "?")
+        content = doc.page_content
+        words   = wc(content)
         f.write(f"\n  [{rank}] uid={uid}  page={page}  words={words}\n")
         f.write(f"  {content}\n")
 
@@ -140,9 +136,9 @@ def evaluate_retriever(
     chunk_lookup: dict,
     timestamp: str,
 ) -> dict:
-    max_k   = max(k_values)
-    hit_sum = {k: 0 for k in k_values}
-    rr_sum  = 0.0
+    max_k      = max(k_values)
+    hit_sum    = {k: 0 for k in k_values}
+    rr_sum     = 0.0
     miss_count = 0
 
     bad_case_path = None
@@ -162,7 +158,6 @@ def evaluate_retriever(
 
         rr_sum += reciprocal_rank(results[:max_k], ground_truth)
 
-        # bad case: miss at max_k
         if DEBUG and hit_at_k(results, ground_truth, max_k) == 0:
             miss_count += 1
             gt_doc = chunk_lookup.get(ground_truth)
@@ -213,7 +208,7 @@ def append_csv(result: dict, k_values: List[int], path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def print_table(results: List[dict], k_values: List[int]) -> None:
-    col_w   = 22
+    col_w   = 28
     k_w     = 8
     header  = f"{'Retriever':<{col_w}}" + "".join(f"Hit@{k:<{k_w-4}}" for k in k_values) + f"{'MRR':<{k_w}}"
     divider = "-" * len(header)
@@ -252,21 +247,26 @@ def main():
     print(f"Docs loaded: {len(docs)}")
 
     print("\nInitializing retrievers...")
-    bm25     = BM25Retriever(docs)
-    bge      = BGERetriever(docs)
-    hybrid   = HybridRetriever(docs)
-    reranker = Reranker()
+    bm25               = BM25Retriever(docs)
+    bge                = BGERetriever(docs)
+    hybrid             = HybridRetriever(docs)
+    reranker           = Reranker()
+    finetuned_reranker = FinetunedReranker()
 
     def bm25_fn(q): return bm25.retrieve_topk(q, topk=max_k)
     def bge_fn(q):  return bge.retrieve_topk(q, topk=max_k)
     def hybrid_reranker_fn(q):
         candidates = hybrid.retrieve(q, topk=max_k)
         return reranker.rerank(q, candidates, batch_size=RERANKER_BATCH)
+    def hybrid_finetuned_reranker_fn(q):
+        candidates = hybrid.retrieve(q, topk=max_k)
+        return finetuned_reranker.rerank(q, candidates, batch_size=RERANKER_BATCH)
 
     retrievers = [
-        ("BM25",            bm25_fn),
-        ("BGE",             bge_fn),
-        ("Hybrid+Reranker", hybrid_reranker_fn),
+        ("BM25",                     bm25_fn),
+        ("BGE",                      bge_fn),
+        ("Hybrid+Reranker",          hybrid_reranker_fn),
+        ("Hybrid+FinetunedReranker", hybrid_finetuned_reranker_fn),
     ]
 
     done = load_checkpoint(EVAL_RETRIEVAL_PATH)

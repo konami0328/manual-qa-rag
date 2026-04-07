@@ -71,6 +71,7 @@ MINE_TOPK             = 20  # fetch more candidates to keep neg pool non-empty a
 RERANKER_TRAIN_PATH   = os.path.join(ROOT, "data", "reranker", "train_triplets.jsonl")
 RERANKER_VAL_PATH     = os.path.join(ROOT, "data", "reranker", "val_triplets.jsonl")
 RERANKER_CKPT_DIR     = os.path.join(ROOT, "data", "reranker", "ckpt")
+RERANKER_BEST_CKPT    = os.path.join(ROOT, "data", "reranker", "ckpt", "epoch2_valloss_0.06965")
 
 LR           = 2e-4
 BATCH_SIZE   = 16

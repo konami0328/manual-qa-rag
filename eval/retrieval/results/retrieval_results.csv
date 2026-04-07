@@ -14,3 +14,8 @@ Hybrid+Reranker,5,0.9057,0.7522
 Hybrid+Reranker,10,0.9485,0.7522
 Hybrid+Reranker,15,0.9578,0.7522
 Hybrid+Reranker,20,0.9634,0.7522
+Hybrid+FinetunedReranker,1,0.696,0.7972
+Hybrid+FinetunedReranker,5,0.928,0.7972
+Hybrid+FinetunedReranker,10,0.9529,0.7972
+Hybrid+FinetunedReranker,15,0.9603,0.7972
+Hybrid+FinetunedReranker,20,0.9628,0.7972
