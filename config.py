@@ -73,8 +73,8 @@ RERANKER_VAL_PATH     = os.path.join(ROOT, "data", "reranker", "val_triplets.jso
 RERANKER_CKPT_DIR     = os.path.join(ROOT, "data", "reranker", "ckpt")
 
 LR           = 2e-4
-BATCH_SIZE   = 32
-NUM_EPOCHS   = 5
+BATCH_SIZE   = 16
+NUM_EPOCHS   = 3
 LORA_RANK    = 16
 LORA_ALPHA   = 32   # 2 * rank, standard empirical value
 LORA_DROPOUT = 0.1

@@ -12,11 +12,11 @@ Frozen parameters:
     - all encoder dense layers (base weights, only LoRA deltas are trained)
 
 Input:  RERANKER_TRAIN_PATH / RERANKER_VAL_PATH  — triplets from mine.py
-Output: best checkpoint saved to RERANKER_CKPT_DIR (by val Hit@1)
+Output: best checkpoint saved to RERANKER_CKPT_DIR (by lowest val loss)
 
-Logging:
-    train_steps_{timestamp}.jsonl  — per-step train loss (every LOG_EVERY_N_STEPS)
-    train_epochs_{timestamp}.jsonl — per-epoch val loss + Hit@k
+Logging (single file train_steps_{timestamp}.jsonl):
+    per step  — {"epoch": int, "step": int, "train_loss": float}
+    per epoch — {"epoch": int, "step": int, "val_loss":   float}
 """
 
 import os
@@ -39,9 +39,8 @@ from config import (
 from train.reranker_trainer.dataset import RerankerDataset
 
 
-LORA_TARGET_MODULES  = ["query", "key", "value", "dense"]
-EVAL_K_VALUES        = [1, 3, 5, 10]
-LOG_EVERY_N_STEPS    = 50
+LORA_TARGET_MODULES = ["query", "key", "value", "dense"]
+LOG_EVERY_N_STEPS   = 100
 
 # ---------------------------------------------------------------------------
 # Model setup
@@ -51,7 +50,7 @@ def build_model(model_path: str) -> nn.Module:
     model = AutoModelForSequenceClassification.from_pretrained(
         model_path,
         num_labels=1,       # single logit output for MSE regression
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,  # bfloat16 has same exponent range as float32, avoids fp16 overflow during training
     )
 
     lora_config = LoraConfig(
@@ -73,57 +72,6 @@ def build_model(model_path: str) -> nn.Module:
     return model
 
 # ---------------------------------------------------------------------------
-# Val Hit@k
-# ---------------------------------------------------------------------------
-
-def evaluate_hit_at_k(
-    model: nn.Module,
-    val_dataset: RerankerDataset,
-    k_values: list[int],
-    device: torch.device,
-    batch_size: int,
-) -> dict[int, float]:
-    """
-    Restore per-query ranking from the flat val dataset, compute Hit@k.
-    Each triplet contributes 3 consecutive samples (pos, weak_pos, neg);
-    group by query_unique_id to reconstruct the ranked list per query.
-    """
-    model.eval()
-    loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-    all_logits = []
-    with torch.no_grad():
-        for batch in loader:
-            input_ids      = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            logits = model(input_ids=input_ids, attention_mask=attention_mask).logits.squeeze(-1)
-            all_logits.extend(logits.float().cpu().tolist())
-
-    # reload triplets to recover query grouping and pos_chunk_id
-    triplets = []
-    with open(RERANKER_VAL_PATH) as f:
-        for line in f:
-            triplets.append(json.loads(line))
-
-    # each triplet → 3 flat samples in order: pos(idx*3), weak_pos(idx*3+1), neg(idx*3+2)
-    hit_sum = {k: 0 for k in k_values}
-    for i, t in enumerate(triplets):
-        base = i * 3
-        scores = {
-            t["pos_chunk_id"]:      all_logits[base],
-            t["weak_pos_chunk_id"]: all_logits[base + 1],
-            t["neg_chunk_id"]:      all_logits[base + 2],
-        }
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        for k in k_values:
-            top_k_ids = [uid for uid, _ in ranked[:k]]
-            if t["pos_chunk_id"] in top_k_ids:
-                hit_sum[k] += 1
-
-    n = len(triplets)
-    return {k: round(hit_sum[k] / n, 4) for k in k_values}
-
-# ---------------------------------------------------------------------------
 # Train
 # ---------------------------------------------------------------------------
 
@@ -137,6 +85,7 @@ def train():
     print(f"Train samples: {len(train_dataset)}  Val samples: {len(val_dataset)}")
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False)
 
     print("Building model...")
     model = build_model(RERANKER_MODEL_PATH).to(device)
@@ -148,13 +97,12 @@ def train():
     loss_fn = nn.MSELoss()
 
     os.makedirs(RERANKER_CKPT_DIR, exist_ok=True)
-    timestamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
-    step_log_path  = os.path.join(RERANKER_CKPT_DIR, f"train_steps_{timestamp}.jsonl")
-    epoch_log_path = os.path.join(RERANKER_CKPT_DIR, f"train_epochs_{timestamp}.jsonl")
+    timestamp     = datetime.now().strftime("%Y%m%d_%H%M%S")
+    step_log_path = os.path.join(RERANKER_CKPT_DIR, f"train_steps_{timestamp}.jsonl")
 
-    best_hit1   = -1.0
-    best_ckpt   = None
-    global_step = 0
+    best_val_loss = float("inf")
+    best_ckpt     = None
+    global_step   = 0
 
     for epoch in range(1, NUM_EPOCHS + 1):
         # --- train ---
@@ -191,8 +139,7 @@ def train():
 
         # --- val loss ---
         model.eval()
-        val_loss   = 0.0
-        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+        val_loss = 0.0
         with torch.no_grad():
             for batch in val_loader:
                 input_ids      = batch["input_ids"].to(device)
@@ -202,30 +149,25 @@ def train():
                 val_loss += loss_fn(logits.float(), labels.float()).item()
         avg_val_loss = round(val_loss / len(val_loader), 6)
 
-        # --- val Hit@k ---
-        hit_at_k = evaluate_hit_at_k(model, val_dataset, EVAL_K_VALUES, device, BATCH_SIZE)
+        print(f"Epoch {epoch} | val_loss={avg_val_loss}")
 
-        print(
-            f"Epoch {epoch} | val_loss={avg_val_loss} | "
-            + " | ".join(f"Hit@{k}={v}" for k, v in hit_at_k.items())
-        )
-
-        with open(epoch_log_path, "a") as f:
+        # log val loss at current step for aligned plotting with train loss
+        with open(step_log_path, "a") as f:
             f.write(json.dumps({
                 "epoch":    epoch,
+                "step":     global_step,
                 "val_loss": avg_val_loss,
-                "hit_at_k": hit_at_k,
             }) + "\n")
 
-        # --- checkpoint (best val Hit@1) ---
-        if hit_at_k[1] > best_hit1:
-            best_hit1 = hit_at_k[1]
-            ckpt_path = os.path.join(RERANKER_CKPT_DIR, f"epoch{epoch}_hit1_{best_hit1}")
+        # --- checkpoint (best val loss) ---
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            ckpt_path = os.path.join(RERANKER_CKPT_DIR, f"epoch{epoch}_valloss_{best_val_loss}")
             model.save_pretrained(ckpt_path)
             best_ckpt = ckpt_path
             print(f"  → New best checkpoint: {ckpt_path}")
 
-    print(f"\nTraining complete. Best checkpoint: {best_ckpt}  (Hit@1={best_hit1})")
+    print(f"\nTraining complete. Best checkpoint: {best_ckpt}  (val_loss={best_val_loss})")
 
 
 if __name__ == "__main__":
