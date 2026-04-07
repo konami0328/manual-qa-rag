@@ -59,7 +59,22 @@ TRAIN_RATIO        = 0.7
 VAL_RATIO          = 0.2
 
 # =============================================================================
-# 6. Evaluation
+# 6. Retrieval Evaluation
 # =============================================================================
 EVAL_K_VALUES         = [1, 5, 10, 15, 20]
-EVAL_RETRIEVAL_PATH   = os.path.join(ROOT, "data", "eval", "retrieval_results.csv")
+EVAL_RETRIEVAL_PATH   = os.path.join(ROOT, "eval", "retrieval", "results", "retrieval_results.csv")
+
+# =============================================================================
+# 7. Reranker Fine-tuning
+# =============================================================================
+MINE_TOPK             = 20  # fetch more candidates to keep neg pool non-empty after adjacency filtering
+RERANKER_TRAIN_PATH   = os.path.join(ROOT, "data", "reranker", "train_triplets.jsonl")
+RERANKER_VAL_PATH     = os.path.join(ROOT, "data", "reranker", "val_triplets.jsonl")
+RERANKER_CKPT_DIR     = os.path.join(ROOT, "data", "reranker", "ckpt")
+
+LR           = 2e-4
+BATCH_SIZE   = 32
+NUM_EPOCHS   = 5
+LORA_RANK    = 16
+LORA_ALPHA   = 32   # 2 * rank, standard empirical value
+LORA_DROPOUT = 0.1
