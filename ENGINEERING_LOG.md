@@ -28,7 +28,7 @@ After each change, run `experiments/parse_analysis.py` to dump all chunks to `ex
 ---
 
 ### Chunk Word Count Distribution
-![Chunk Word Count Distribution](../docs/chunk_length_distribution.png)
+![Chunk Word Count Distribution](eval/chunk/chunk_length_distribution.png)
 
 ### Issue 4: Chunks Mixing Content from Different Sections
 
@@ -522,7 +522,7 @@ and val loss on the same step axis.
 
 ### Results
 
-![Training Curve](../docs/reranker_finetune_training_curves.png)
+![Training Curve](train/reranker_trainer/training_curves.png)
 
 | Epoch | Val Loss |
 |-------|----------|
@@ -541,7 +541,7 @@ stabilizes. Val loss aligns closely with train loss at epoch end — no signific
 
 Evaluated on test set using `eval/retrieval/retrieval.py`:
 
-![Retrieval Results Plot](../eval/retrieval/results/retrieval_results.png)
+![Retrieval Results Plot](eval/retrieval/results/retrieval_results.png)
 
 | Retriever | Hit@1 | Hit@5 | Hit@10 | Hit@15 | Hit@20 | MRR |
 |-----------|-------|-------|--------|--------|--------|-----|
