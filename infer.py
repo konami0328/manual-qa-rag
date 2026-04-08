@@ -3,14 +3,21 @@ from src.reranker.rerank_bge_finetuned import FinetunedReranker
 from src.client.llm_generate import request_chat
 from src.client.mongodb_config import MongoConfig
 from langchain_core.documents import Document
-from config import TOPK
+from config import TOPK, GENERATION_TOPK, GENERATION_THRESHOLD
 
 
 def infer(query: str, retriever: HybridRetriever, reranker: FinetunedReranker) -> str:
-    """Retrieve → rerank → generate with citations."""
-    candidates = retriever.retrieve(query, topk=TOPK)
-    chunks     = reranker.rerank(query, candidates)[:TOPK]
-    context    = "\n".join(f"[{i+1}] {doc.page_content}" for i, doc in enumerate(chunks))
+    candidates = retriever.retrieve(query, topk=TOPK)  # 10
+    chunks     = reranker.rerank(query, candidates)
+    chunks     = [c for c in chunks if c.metadata["rerank_score"] >= GENERATION_THRESHOLD][:GENERATION_TOPK]  # 5
+
+    if not chunks:
+        return "This information is not covered in the provided context."
+
+    context = "\n".join(
+    f"[{i+1}] (Page {doc.metadata.get('page', '?')}) {doc.page_content}"
+    for i, doc in enumerate(chunks)
+    )
     return request_chat(query, context)
 
 

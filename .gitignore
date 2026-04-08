@@ -3,6 +3,7 @@ __pycache__/
 .vscode/
 logs/
 .env
+.ipynb_checkpoints/
 
 models/
 !models/download.sh
@@ -18,3 +19,4 @@ experiments/
 test.py
 plot.py
 *.txt
+*.csv

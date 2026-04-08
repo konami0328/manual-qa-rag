@@ -1,26 +1,30 @@
 from typing import List
 
 import torch
+import warnings
 from langchain_core.documents import Document
 from peft import PeftModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch.nn.functional as F
 
 from config import RERANKER_MODEL_PATH, RERANKER_BEST_CKPT
 
-MAX_LENGTH = 768  # covers 99% chunk length (686 tokens) + query + special tokens
+MAX_LENGTH = 768  # covers P99 chunk length (686 tokens) + query + special tokens
 
 
 class FinetunedReranker:
 
     def __init__(self):
-        base = AutoModelForSequenceClassification.from_pretrained(
-            RERANKER_MODEL_PATH,
-            num_labels=1,
-            torch_dtype=torch.bfloat16,  # bfloat16 has same exponent range as float32, avoids fp16 overflow
-        )
-        model = PeftModel.from_pretrained(base, RERANKER_BEST_CKPT)
-        self._model     = model.merge_and_unload().eval().cuda()
-        self._tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL_PATH)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = AutoModelForSequenceClassification.from_pretrained(
+                RERANKER_MODEL_PATH,
+                num_labels=1,
+                torch_dtype=torch.bfloat16,  # bfloat16 has same exponent range as float32, avoids fp16 overflow
+            )
+            model = PeftModel.from_pretrained(base, RERANKER_BEST_CKPT)
+            self._model     = model.merge_and_unload().eval().cuda()
+            self._tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL_PATH)
 
     def rerank(self, query: str, docs: List[Document], batch_size: int = 32) -> List[Document]:
         """Score each (query, doc) pair, sort by score descending."""
@@ -41,25 +45,3 @@ class FinetunedReranker:
                 doc.metadata["rerank_score"] = round(score, 4)
                 results.append(doc)
         return sorted(results, key=lambda d: d.metadata["rerank_score"], reverse=True)
-
-
-if __name__ == "__main__":
-    from langchain_core.documents import Document
-    from src.client.mongodb_config import MongoConfig
-    from src.retriever.retrieve_hybrid import HybridRetriever
-
-    col  = MongoConfig.get_collection("manual_text")
-    docs = [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in col.find()]
-
-    query     = "How to Adjust the Shoulder Anchor Height"
-    retriever = HybridRetriever(docs)
-    reranker  = FinetunedReranker()
-
-    candidates = retriever.retrieve(query, topk=10)
-    results    = reranker.rerank(query, candidates)
-
-    print(f"Candidates: {len(candidates)} → After rerank: {len(results)}\n")
-    for r in results:
-        print(f"Page: {r.metadata.get('page')} | Score: {r.metadata.get('rerank_score')}")
-        print(r.page_content[:200], "...")
-        print("=" * 60)

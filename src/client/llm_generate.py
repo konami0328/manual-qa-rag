@@ -16,13 +16,29 @@ LLM_CHAT_PROMPT = """
 {context}
 
 ### Task
-You are a specialized Q&A assistant for the Tesla Model Y User Manual. Using the information provided in the Context section, answer the following question: "{query}".
+You are a Q&A assistant for the Tesla Model Y Owner's Manual.
+Answer the question using ONLY the information provided in the Context above.
 
-### Guidelines
-1. **Accuracy**: Your answer must be precise and the sentences should flow naturally.
-2. **Format**: Your output MUST strictly follow this format:
-   {{Answer}} [{{Citation Number 1}}, {{Citation Number 2}}, ...]
-3. **Grounding**: If the answer cannot be found in the provided Context, state "No Answer." Do not hallucinate or add any external information.
+### Question
+{query}
+
+### Output Format
+Follow these rules strictly:
+
+1. **Citation**: Place the source page number in brackets immediately after each 
+   sentence or step that uses information from the Context, e.g. [p.45] or [p.45, p.46].
+
+2. **Structure**:
+   - Use a numbered list ONLY if the Context explicitly contains steps or actions like "1. ... 2. ... 3. ..." or uses words like "first", "then", "finally".
+   - Otherwise: use flowing sentences. Do NOT convert facts, descriptions, or warnings into a numbered list.
+
+3. **Completeness**: Cover all relevant steps and details found in the Context. 
+   Do not omit steps.
+
+4. **Grounding**: Do not add any information not present in the Context. 
+   If the question cannot be answered from the Context, respond only with: 
+   "This information is not covered in the provided context."
+   Do not describe or summarize what the Context does contain.
 """
 
 
@@ -38,23 +54,11 @@ def request_chat(query: str, context: str) -> str:
 
     output = _model.generate(
         input_ids,
+        attention_mask=torch.ones_like(input_ids),
+        pad_token_id=_tokenizer.eos_token_id,
         max_new_tokens=2048,
         do_sample=True,
     )
     
     new_tokens = output[0][input_ids.shape[-1]:]
     return _tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-
-if __name__ == "__main__":
-    context = """
-To Adjust the Shoulder Anchor Height
-Model Y is equipped with an adjustable shoulder anchor for each front seat to ensure that the seat belt can be positioned correctly. The seat belt should lie flat across the mid-point of your collar bone while in the correct driving position (see Correct Driving Position). Adjust the height of the shoulder anchor if the seat belt is not positioned correctly:
-1. Press and hold the button on the shoulder anchor to release the locking mechanism.
-2. While holding the button, move the shoulder anchor up or down, as necessary, to correctly position the seat belt.
-3. Release the button on the shoulder anchor so that it locks into position.
-"""
-
-    query = "How to adjust the shoulder anchor height?"
-    result = request_chat(query, context)
-    print(result)

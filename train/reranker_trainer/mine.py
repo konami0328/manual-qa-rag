@@ -41,7 +41,7 @@ from src.retriever.retrieve_hybrid import HybridRetriever
 # Config
 # ---------------------------------------------------------------------------
 
-DEBUG        = True
+DEBUG        = False
 DEBUG_SIZE   = 10
 MINE_WORKERS = 1   # reranker is GPU-bound; parallelism here adds little
 

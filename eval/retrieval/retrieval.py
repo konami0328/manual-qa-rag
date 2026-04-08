@@ -17,10 +17,14 @@ import random
 from datetime import datetime
 from typing import List, Tuple
 
+import torch
 from langchain_core.documents import Document
+from peft import PeftModel
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from config import (
     EVAL_K_VALUES, EVAL_RETRIEVAL_PATH, TEST_PATH,
+    RERANKER_MODEL_PATH, RERANKER_BEST_CKPT,
 )
 from src.client.mongodb_config import MongoConfig
 from src.retriever.retrieve_bm25 import BM25Retriever
