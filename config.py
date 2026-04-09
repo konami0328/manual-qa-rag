@@ -84,5 +84,8 @@ GENERATION_THRESHOLD = -1.0
 GENERATION_TOPK = 5
 
 # =============================================================================
-# 8. LLM Fine-tuning
+# 8. Generation
 # =============================================================================
+VLLM_BASE_URL    = "http://localhost:8000/v1"
+VLLM_MODEL_NAME  = "models/LLM-Research/Meta-Llama-3.1-8B-Instruct"
+VLLM_MAX_WORKERS = 32
