@@ -29,8 +29,9 @@ Follow these rules strictly:
    sentence or step that uses information from the Context, e.g. [p.45] or [p.45, p.46].
 
 2. **Structure**:
-   - Use a numbered list ONLY if the Context explicitly contains steps or actions like "1. ... 2. ... 3. ..." or uses words like "first", "then", "finally".
-   - Otherwise: use flowing sentences. Do NOT convert facts, descriptions, or warnings into a numbered list.
+   - If the answer involves sequential steps or actions: use a numbered list, 
+     one citation per step.
+   - Otherwise: use flowing sentences, one citation per sentence.
 
 3. **Completeness**: Cover all relevant steps and details found in the Context. 
    Do not omit steps.
