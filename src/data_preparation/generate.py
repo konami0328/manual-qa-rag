@@ -1,3 +1,18 @@
+"""
+Generate raw QA pairs from MongoDB chunks via LLM, saved as JSONL checkpoint.
+
+For each chunk, prompts LLM to generate 5 realistic question-answer pairs.
+Concurrent LLM calls via ThreadPoolExecutor. Checkpoint by source_chunk_id
+— safe to resume after interruption.
+
+Input:
+    MongoDB "manual_text" — chunks with len(page_content.split()) >= MINIMAL_CHUNK_SIZE
+
+Output:
+    QA_CKPT_PATH (config.py) — JSONL, one line per chunk:
+        {source_chunk_id, page, raw_resp}
+"""
+
 import os
 import json
 import threading

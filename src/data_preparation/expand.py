@@ -1,3 +1,18 @@
+"""
+Expand each QA pair with 3 LLM-generated question paraphrases.
+
+Loads filtered QA pairs (score >= MIN_SCORE), generates 3 paraphrases per
+question to improve retriever robustness to query variation. Concurrent LLM
+calls via ThreadPoolExecutor. Checkpoint by question — safe to resume.
+
+Input:
+    FILTER_PATH  (config.py) — scored QA pairs from filter.py, keep score >= MIN_SCORE
+
+Output:
+    EXPAND_PATH  (config.py) — JSONL, one line per QA pair:
+        {source_chunk_id, page, question, answer, paraphrases}
+"""
+
 import os
 import json
 import random

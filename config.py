@@ -65,7 +65,7 @@ EVAL_K_VALUES         = [1, 5, 10, 15, 20]
 EVAL_RETRIEVAL_PATH   = os.path.join(ROOT, "eval", "retrieval", "results", "retrieval_results.csv")
 
 # =============================================================================
-# 7. Reranker Fine-tuning
+# 7.1. Reranker Fine-tuning
 # =============================================================================
 MINE_TOPK             = 20  # fetch more candidates to keep neg pool non-empty after adjacency filtering
 RERANKER_TRAIN_PATH   = os.path.join(ROOT, "data", "reranker", "train_triplets.jsonl")
@@ -84,8 +84,26 @@ GENERATION_THRESHOLD = -1.0
 GENERATION_TOPK = 5
 
 # =============================================================================
+# 7.2. Reranker Fine-tuning
+# =============================================================================
+LLM_TRAIN_PATH        = os.path.join(ROOT, "data", "llm", "train_samples.jsonl")
+LLM_VAL_PATH          = os.path.join(ROOT, "data", "llm", "val_samples.jsonl")
+LLM_CKPT_DIR          = os.path.join(ROOT, "data", "llm", "ckpt")
+LLM_MERGED_PATH       = os.path.join(ROOT, "data", "llm", "merged")
+LLM_QUANTIZED_PATH    = os.path.join(ROOT, "data", "llm", "quantized")
+LLM_MODEL_PATH        = "models/LLM-Research/Meta-Llama-3.1-8B-Instruct"
+
+LLM_LORA_RANK         = 16
+LLM_LORA_ALPHA        = 32
+LLM_LORA_DROPOUT      = 0.1
+LLM_LR                = 2e-4
+LLM_BATCH_SIZE        = 4
+LLM_NUM_EPOCHS        = 2
+LLM_MAX_LENGTH        = 2048
+
+# =============================================================================
 # 8. Generation
 # =============================================================================
 VLLM_BASE_URL    = "http://localhost:8000/v1"
-VLLM_MODEL_NAME  = "models/LLM-Research/Meta-Llama-3.1-8B-Instruct"
-VLLM_MAX_WORKERS = 32
+VLLM_MODEL_NAME  = os.path.join(ROOT, "models/LLM-Research/Meta-Llama-3.1-8B-Instruct")
+VLLM_MAX_WORKERS = 1

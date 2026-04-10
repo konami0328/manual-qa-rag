@@ -1,3 +1,23 @@
+"""
+Parse raw PDF pages into LLM-cleaned Document objects and persist to disk.
+
+Steps:
+    1. load_pdf()          — extract text from pages [PAGE_START, PAGE_END],
+                             crop header (PAGE_CROP_TOP px) and footer (PAGE_CROP_BOTTOM px),
+                             skip empty pages
+    2. request_llm_clean() — fix broken line breaks, remove PDF artifacts,
+                             insert <<<SPLIT>>> delimiters at semantic boundaries
+    3. pickle.dump()       — serialize cleaned docs to CLEAN_DOCS_PATH
+
+Input:
+    PDF_FILE          (config.py) — source PDF
+
+Output:
+    CLEAN_DOCS_PATH   (config.py) — pickle of List[Document]
+                                    each Document: page_content = LLM-cleaned text,
+                                    metadata = {source, page}
+"""
+
 import os
 import pickle
 from typing import List

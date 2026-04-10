@@ -1,3 +1,20 @@
+"""
+Build train/val/test splits with MS MARCO negatives from expanded QA pairs.
+
+Splits at item level before flattening paraphrases to prevent paraphrase
+leakage across splits. MS MARCO negatives are split independently.
+Ratio: TRAIN_RATIO / VAL_RATIO / remainder (config.py).
+
+Input:
+    EXPAND_PATH  (config.py) — expanded QA pairs from expand.py
+    MS MARCO v2.1 train set  — NEGATIVE_COUNT queries sampled as negatives
+
+Output:
+    TRAIN_PATH, VAL_PATH, TEST_PATH  (config.py) — JSONL, one line per sample:
+        {unique_id, question, answer, source_chunk_id, page}
+        negatives: source_chunk_id=None, answer="No Answer"
+"""
+
 import os
 import json
 import random

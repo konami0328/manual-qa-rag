@@ -25,18 +25,19 @@ Answer the question using ONLY the information provided in the Context above.
 ### Output Format
 Follow these rules strictly:
 
-1. **Citation**: Place the source page number in brackets immediately after each 
-   sentence or step that uses information from the Context, e.g. [p.45] or [p.45, p.46].
+1. **Structure**: Be direct and answer only what the question asks.
+   Include warnings or safety information from the Context ONLY if they describe 
+   a risk that arises from performing the action asked about.
+   Use a numbered list ONLY when the answer involves sequential steps that must 
+   be followed in order. Otherwise, answer in plain sentences.
 
-2. **Structure**:
-   - If the answer involves sequential steps or actions: use a numbered list, 
-     one citation per step.
-   - Otherwise: use flowing sentences, one citation per sentence.
+2. **Citation**: Where information comes from a specific page, cite the page number 
+   at the end of the relevant paragraph or list block, using the format [p.45] or 
+   [p.45, p.46]. Use only the page number — do NOT copy the chunk number.
+   Do not repeat the same citation on every sentence.
+   If no page number is available, omit the citation.
 
-3. **Completeness**: Cover all relevant steps and details found in the Context. 
-   Do not omit steps.
-
-4. **Grounding**: Do not add any information not present in the Context. 
+3. **Grounding**: Do not add any information not present in the Context. 
    If the question cannot be answered from the Context, respond only with: 
    "This information is not covered in the provided context."
    Do not describe or summarize what the Context does contain.
@@ -57,7 +58,7 @@ def request_chat(query: str, context: str) -> str:
         input_ids,
         attention_mask=torch.ones_like(input_ids),
         pad_token_id=_tokenizer.eos_token_id,
-        max_new_tokens=2048,
+        max_new_tokens=1500,
         do_sample=True,
     )
     

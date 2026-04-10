@@ -40,9 +40,9 @@ from src.client.llm_generate_vllm import request_chat
 # Config
 # ---------------------------------------------------------------------------
 
-DEBUG      = True
+DEBUG      = False
 DEBUG_SIZE = 50
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "eval", "generate", "results")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "results")
 NO_ANSWER  = "This information is not covered in the provided context."
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ def load_docs() -> list[Document]:
     return [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in col.find()]
 
 # ---------------------------------------------------------------------------
-# Infer (retrieval is serial — reranker is GPU-bound)
+# Infer
 # ---------------------------------------------------------------------------
 
 def _build_context(chunks: list[Document]) -> str:
@@ -75,6 +75,7 @@ def _build_context(chunks: list[Document]) -> str:
         for i, doc in enumerate(chunks)
     )
 
+_reranker_lock = threading.Lock()
 
 def _retrieve_and_rank(
     query: str,
@@ -82,8 +83,9 @@ def _retrieve_and_rank(
     reranker: FinetunedReranker,
 ) -> list[Document] | None:
     candidates = retriever.retrieve(query, topk=TOPK)
-    ranked     = reranker.rerank(query, candidates)
-    chunks     = [c for c in ranked if c.metadata["rerank_score"] >= GENERATION_THRESHOLD][:GENERATION_TOPK]
+    with _reranker_lock:
+        ranked = reranker.rerank(query, candidates)
+    chunks = [c for c in ranked if c.metadata["rerank_score"] >= GENERATION_THRESHOLD][:GENERATION_TOPK]
     return chunks if chunks else None
 
 # ---------------------------------------------------------------------------
@@ -155,27 +157,31 @@ def main():
     file_lock   = threading.Lock()
     done_count  = 0
 
-    # retrieval + rerank is GPU-bound and serial per query;
-    # concurrency here overlaps LLM HTTP wait with next retrieval
     with concurrent.futures.ThreadPoolExecutor(max_workers=VLLM_MAX_WORKERS) as executor:
         futures = {
             executor.submit(_process, sample, retriever, reranker): i
             for i, sample in enumerate(all_samples)
         }
         for future in concurrent.futures.as_completed(futures):
-            i          = futures[future]
-            records[i] = future.result()
+            i = futures[future]
+            try:
+                records[i] = future.result()
+            except Exception as e:
+                print(f"ERROR on sample {i}: {e}")
+                records[i] = None
             with file_lock:
                 done_count += 1
-                if done_count % 50 == 0:
+                if done_count % 10 == 0 or done_count == len(all_samples):
                     print(f"  {done_count}/{len(all_samples)}")
 
+    valid_records = [r for r in records if r is not None]
+
     with open(output_path, "w") as f:
-        for r in records:
+        for r in valid_records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    pos_hit  = sum(1 for r in records if r["sample_type"] == "positive" and r["retrieval_hit"])
-    pos_miss = sum(1 for r in records if r["sample_type"] == "positive" and not r["retrieval_hit"])
+    pos_hit  = sum(1 for r in valid_records if r["sample_type"] == "positive" and r["retrieval_hit"])
+    pos_miss = sum(1 for r in valid_records if r["sample_type"] == "positive" and not r["retrieval_hit"])
     print(f"\nDone.")
     print(f"  Positive hit : {pos_hit}")
     print(f"  Positive miss: {pos_miss}")

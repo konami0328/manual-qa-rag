@@ -1,3 +1,20 @@
+"""
+Hybrid dense+sparse retriever backed by BGE-M3, Milvus, and MongoDB.
+
+Indexes document chunks into Milvus (dense: COSINE, sparse: IP) on first build,
+stores full text in MongoDB. At query time fuses dense and sparse ANN results
+via RRF and hydrates page_content from MongoDB.
+
+Args:
+    docs          (List[Document]) : all chunks from MongoDB "manual_text"
+    force_rebuild (bool)           : drop and rebuild Milvus collection if True;
+                                     skip build if collection already exists
+
+Usage:
+    retriever = BGERetriever(docs, force_rebuild=False)
+    results   = retriever.retrieve_topk(query, topk=10)  # List[Document]
+"""
+
 import numpy as np
 from typing import List
 
@@ -139,17 +156,3 @@ class BGERetriever:
     def _sparse_to_milvus(lexical_weights: dict) -> dict:
         """Convert bge-m3 lexical_weights {token_id: weight} to Milvus sparse format."""
         return {int(k): float(v) for k, v in lexical_weights.items()}
-
-
-if __name__ == "__main__":
-    from src.client.mongodb_config import MongoConfig
-
-    col  = MongoConfig.get_collection("manual_text")
-    docs = [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in col.find()]
-
-    retriever = BGERetriever(docs)
-    results   = retriever.retrieve_topk("How to Adjust the Shoulder Anchor Height", topk=3)
-    for r in results:
-        print(f"Page: {r.metadata.get('page')}")
-        print(r.page_content)
-        print("=" * 60)

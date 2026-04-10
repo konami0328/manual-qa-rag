@@ -1,3 +1,18 @@
+"""
+Fine-tuned cross-encoder reranker using bge-reranker-v2-m3 with LoRA weights merged.
+
+Loads base model + PEFT checkpoint, merges LoRA weights at init, runs in eval
+mode on CUDA. Outputs raw logits (not normalized) stored in
+doc.metadata["rerank_score"]. Threshold calibration required before production use.
+
+Args:
+    None — model path and checkpoint loaded from config.py
+
+Usage:
+    reranker = FinetunedReranker()
+    results  = reranker.rerank(query, docs, batch_size=32)  # List[Document]
+"""
+
 from typing import List
 
 import torch

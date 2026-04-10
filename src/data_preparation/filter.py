@@ -1,3 +1,20 @@
+"""
+Score raw QA pairs for quality via LLM, saved as JSONL checkpoint.
+
+For each (question, answer, source_chunk) triple, prompts LLM to assign a
+quality score 1-5. All pairs saved regardless of score for flexible downstream
+filtering. Concurrent LLM calls via ThreadPoolExecutor. Checkpoint by
+(source_chunk_id, question) — safe to resume after interruption.
+
+Input:
+    QA_CKPT_PATH  (config.py) — raw QA pairs from generate.py
+    MongoDB "manual_text"     — source chunk text lookup
+
+Output:
+    FILTER_PATH   (config.py) — JSONL, one line per QA pair:
+        {source_chunk_id, page, question, answer, score, reason}
+"""
+
 import os
 import json
 import threading

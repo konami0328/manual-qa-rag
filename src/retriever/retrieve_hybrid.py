@@ -1,3 +1,19 @@
+"""
+Hybrid retriever combining BGE dense+sparse RRF and BM25 via union dedup.
+
+BGE results are ranked by RRF internally; BM25 serves as a safety net for
+exact keyword matches that BGE sparse may miss. Final candidate pool preserves
+BGE rank order with BM25-only results appended — not relevance-sorted.
+
+Args:
+    docs          (List[Document]) : all chunks from MongoDB "manual_text"
+    force_rebuild (bool)           : passed through to BGERetriever
+
+Usage:
+    retriever = HybridRetriever(docs, force_rebuild=False)
+    results   = retriever.retrieve(query, topk=10)  # List[Document]
+"""
+
 from typing import List
 
 from langchain_core.documents import Document
@@ -31,20 +47,3 @@ class HybridRetriever:
                 candidates.append(doc)
 
         return candidates
-
-
-if __name__ == "__main__":
-    from langchain_core.documents import Document
-    from src.client.mongodb_config import MongoConfig
-
-    col  = MongoConfig.get_collection("manual_text")
-    docs = [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in col.find()]
-
-    retriever = HybridRetriever(docs)
-    results   = retriever.retrieve("How to Adjust the Shoulder Anchor Height", topk=10)
-
-    print(f"Total candidates: {len(results)}\n")
-    for r in results:
-        print(f"Page: {r.metadata.get('page')}")
-        print(r.page_content[:100], "...")
-        print("=" * 60)

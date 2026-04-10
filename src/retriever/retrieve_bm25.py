@@ -1,3 +1,19 @@
+"""
+BM25 keyword retriever backed by rank_bm25.BM25Okapi, persisted to disk.
+
+Builds BM25 index from tokenized chunk texts on first run and pickles it to
+BM25_PKL_FILE. Subsequent instantiations load from pickle, skipping rebuild.
+Tokenization: lowercase, strip punctuation, remove English stopwords.
+
+Args:
+    docs (List[Document]) : all chunks from MongoDB "manual_text";
+                            ignored if BM25_PKL_FILE already exists
+
+Usage:
+    retriever = BM25Retriever(docs)
+    results   = retriever.retrieve_topk(query, topk=5)  # List[Document]
+"""
+
 import pickle
 import string
 from typing import List
@@ -53,15 +69,3 @@ class BM25Retriever:
         """Lowercase, remove punctuation and stopwords."""
         tokens = text.lower().translate(str.maketrans("", "", string.punctuation)).split()
         return [t for t in tokens if t not in _stopwords]
-
-
-if __name__ == "__main__":
-    from src.client.mongodb_config import MongoConfig
-    col     = MongoConfig.get_collection("manual_text")
-    docs    = [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in col.find()]
-    bm25    = BM25Retriever(docs)
-    results = bm25.retrieve_topk("How to Adjust the Shoulder Anchor Height", topk=3)
-    for r in results:
-        print(f"Page: {r.metadata.get('page')}")
-        print(r.page_content)
-        print("=" * 60)

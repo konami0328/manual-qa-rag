@@ -37,9 +37,9 @@ from src.client.llm_generate import request_chat
 # Config
 # ---------------------------------------------------------------------------
 
-DEBUG      = True
+DEBUG      = False
 DEBUG_SIZE = 50
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "eval", "generate", "results")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "results")
 NO_ANSWER  = "This information is not covered in the provided context."
 
 # ---------------------------------------------------------------------------

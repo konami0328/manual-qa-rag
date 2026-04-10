@@ -20,3 +20,7 @@ test.py
 plot.py
 *.txt
 *.csv
+*.json
+*.jsonl
+
+nohup.out

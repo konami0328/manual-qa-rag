@@ -565,3 +565,94 @@ Fine-tuning primarily improves ranking precision (correct chunk ranked higher), 
 | Decision | Reason |
 |----------|--------|
 | RERANKER_THRESHOLD calibration | Fine-tuned model outputs raw logits (not normalized); threshold requires empirical calibration against generation quality |
+
+---
+
+## 8. Generation Baseline
+
+### Overview
+
+With retrieval validated (Hit@10=0.9529, MRR=0.7972), the next step is to establish a
+generation baseline using the off-the-shelf Llama-3.1-8B-Instruct served via vLLM. This
+baseline captures generation quality before any LLM fine-tuning, enabling a clean before/after
+comparison.
+
+---
+
+### Architecture
+
+```
+question
+    ↓
+HybridRetriever (topk=10)
+    ↓
+FinetunedReranker (threshold=-1.0) → top-5 chunks
+    ↓
+Llama-3.1-8B-Instruct (vLLM)
+    ↓
+answer
+```
+
+**GENERATION_THRESHOLD=-1.0:** Permissive threshold — passes all chunks that survive reranking.
+Threshold calibration is deferred until after LLM fine-tuning, as score distributions may
+shift.
+
+**GENERATION_TOPK=5:** Top-5 chunks passed to LLM as context. Balances context completeness
+against prompt length.
+
+---
+
+### Inference Pipeline (`eval/generate/generate_vllm.py`)
+
+- Loads test set, splits into positives (source_chunk_id != None) and negatives
+- For each sample: retrieve → rerank → LLM generate
+- Negatives that pass no chunks after threshold → return fixed NO_ANSWER string
+- Records `retrieval_hit` flag per positive sample for decoupled eval
+- Output: `eval/generate/results/generation_raw_<timestamp>.jsonl`
+
+**vLLM serving:**
+```
+--model Meta-Llama-3.1-8B-Instruct
+--dtype bfloat16
+--max-model-len 4096
+--gpu-memory-utilization 0.75
+```
+
+**Concurrency:** `VLLM_MAX_WORKERS=1` — reranker (GPU-bound, bfloat16) is not thread-safe
+under concurrent access even with Python-level locking; serializing inference avoids dtype
+conflicts and segfaults. Concurrency optimization is deferred to the FastAPI + Locust phase.
+
+---
+
+### Evaluation (`eval/generate/eval.py`)
+
+Evaluation is stratified by sample type and retrieval outcome.
+Due to cost considerations, evaluation is limited to 400 positive samples and 150 negative samples.
+
+| Sample type | Metric | What it measures |
+|-------------|--------|-----------------|
+| Negative | Refusal rate | Does the pipeline correctly refuse out-of-domain questions? |
+| Positive + retrieval hit | Faithfulness (RAGAS) | Does the answer stay grounded in the retrieved context? |
+| Positive + retrieval hit | Answer Relevancy (RAGAS) | Is the answer on-topic relative to the question? |
+| Positive + retrieval hit | ROUGE-L | Lexical overlap with ground truth answer |
+| Positive + retrieval miss | Logged, skipped | Retrieval failure — not a generation signal |
+
+**Why RAGAS metrics do not compare against ground truth:**
+Faithfulness evaluates answer vs. context (hallucination detection). Answer Relevancy
+evaluates answer vs. question (topicality). Neither uses ground truth. ROUGE-L is the only
+metric that directly compares answer against ground truth, and serves as a lexical reference
+rather than a primary quality signal.
+
+**Embeddings for Answer Relevancy:** bge-m3 dense vectors (consistent with retrieval pipeline).
+
+---
+
+### Results
+
+| Metric | Score |
+|--------|-------|
+| Refusal rate (negatives) | — |
+| Faithfulness | — |
+| Answer Relevancy | — |
+| ROUGE-L | — |
+| Retrieval hit rate (eval subset) | — |

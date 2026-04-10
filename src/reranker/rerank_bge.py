@@ -1,3 +1,18 @@
+"""
+Off-the-shelf cross-encoder reranker using bge-reranker-v2-m3.
+
+Scores each (query, doc) pair, filters by RERANKER_THRESHOLD, and returns
+docs sorted by score descending. Scores are normalized to [0, 1] and stored
+in doc.metadata["rerank_score"] for downstream threshold calibration.
+
+Args:
+    None — model path and threshold loaded from config.py
+
+Usage:
+    reranker = Reranker()
+    results  = reranker.rerank(query, docs, batch_size=32)  # List[Document]
+"""
+
 from typing import List
 
 from FlagEmbedding import FlagReranker

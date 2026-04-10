@@ -1,3 +1,24 @@
+"""
+Split LLM-cleaned docs on <<<SPLIT>>> delimiters, assign global chunk_index,
+and upsert all chunks into MongoDB.
+
+Steps:
+    1. pickle.load()   — load cleaned docs from CLEAN_DOCS_PATH
+    2. split_chunks()  — split each Document on <<<SPLIT>>>, assign zero-based
+                         continuous chunk_index and md5(page_content) as unique_id
+    3. save()          — validate via ManualInfo schema, upsert into MongoDB
+                         collection "manual_text"
+
+Input:
+    CLEAN_DOCS_PATH   (config.py) — pickle of List[Document] from parse.py
+
+Output:
+    MongoDB "manual_text" collection — documents with fields:
+        unique_id    : md5(page_content)
+        page_content : str
+        metadata     : {source, page, unique_id, chunk_index}
+"""
+
 import hashlib
 import pickle
 from typing import List
