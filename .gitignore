@@ -24,3 +24,4 @@ plot.py
 *.jsonl
 
 nohup.out
+mongo.ini

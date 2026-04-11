@@ -45,7 +45,6 @@ from config import (
     TRAIN_PATH, VAL_PATH,
     LLM_TRAIN_PATH, LLM_VAL_PATH,
     TOPK, GENERATION_TOPK, GENERATION_THRESHOLD,
-    RERANKER_MODEL_PATH, RERANKER_BEST_CKPT,
     MAX_WORKERS,
 )
 from src.client.mongodb_config import MongoConfig

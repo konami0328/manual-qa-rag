@@ -6,7 +6,7 @@ load_dotenv()
 # =============================================================================
 # Root
 # =============================================================================
-ROOT = "/root/autodl-tmp/manual-qa-rag"
+ROOT = "/mnt/e/ML_Engineer/manual-qa"
 
 # =============================================================================
 # 1. Parse
@@ -84,12 +84,11 @@ GENERATION_THRESHOLD = -1.0
 GENERATION_TOPK = 5
 
 # =============================================================================
-# 7.2. Reranker Fine-tuning
+# 7.2. LLM Fine-tuning
 # =============================================================================
 LLM_TRAIN_PATH        = os.path.join(ROOT, "data", "llm", "train_samples.jsonl")
 LLM_VAL_PATH          = os.path.join(ROOT, "data", "llm", "val_samples.jsonl")
 LLM_CKPT_DIR          = os.path.join(ROOT, "data", "llm", "ckpt")
-LLM_MERGED_PATH       = os.path.join(ROOT, "data", "llm", "merged")
 LLM_QUANTIZED_PATH    = os.path.join(ROOT, "data", "llm", "quantized")
 LLM_MODEL_PATH        = "models/LLM-Research/Meta-Llama-3.1-8B-Instruct"
 
