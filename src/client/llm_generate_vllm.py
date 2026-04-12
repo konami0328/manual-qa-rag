@@ -50,3 +50,18 @@ def request_chat(query: str, context: str) -> str:
         temperature     = 0.3,
     )
     return response.choices[0].message.content
+
+def request_chat_stream(query: str, context: str):
+    """Yield LLM output tokens one by one via vLLM streaming."""
+    prompt = LLM_CHAT_PROMPT.format(context=context, query=query)
+    stream = _client.chat.completions.create(
+        model       = VLLM_MODEL_NAME,
+        messages    = [{"role": "user", "content": prompt}],
+        max_tokens  = 1500,
+        temperature = 0.3,
+        stream      = True,
+    )
+    for chunk in stream:
+        token = chunk.choices[0].delta.content
+        if token:
+            yield token

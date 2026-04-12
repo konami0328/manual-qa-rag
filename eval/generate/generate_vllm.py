@@ -71,7 +71,7 @@ def load_docs() -> list[Document]:
 
 def _build_context(chunks: list[Document]) -> str:
     return "\n".join(
-        f"[{i+1}] (Page {doc.metadata.get('page', '?')}) {doc.page_content}"
+        f"[Chunk {i+1}, p.{doc.metadata.get('page', '?')}] {doc.page_content}"
         for i, doc in enumerate(chunks)
     )
 

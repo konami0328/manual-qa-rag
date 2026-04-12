@@ -23,11 +23,8 @@ Calibration data:
     Questions from LLM_TRAIN_PATH (up to AWQ_CALIB_SAMPLES samples).
     Only the question text is used — no context or answer needed.
 
-Usage:
-    python train/llm_trainer/merge_and_quantize.py <path/to/lora_checkpoint>
-
-Example:
-    python train/llm_trainer/merge_and_quantize.py data/llm/ckpt/epoch_3
+Usage example:
+    python -m train.llm_trainer.merge_quantize data/llm/ckpt/epoch_1
 """
 
 import os
@@ -132,6 +129,7 @@ def quantize(tmp_dir: str, output_path: str, calib_data: list[str]) -> None:
     model = AutoAWQForCausalLM.from_pretrained(
         tmp_dir,
         safetensors = True,
+        device_map  = "cpu",
     )
     tokenizer = AutoTokenizer.from_pretrained(tmp_dir)
 
@@ -165,8 +163,6 @@ def quantize(tmp_dir: str, output_path: str, calib_data: list[str]) -> None:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python merge_and_quantize.py <path/to/lora_checkpoint>")
-        print("Example: python merge_and_quantize.py data/llm/ckpt/epoch_3")
         sys.exit(1)
 
     lora_ckpt_path = sys.argv[1]

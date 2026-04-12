@@ -1,18 +1,29 @@
 """
-LoRA supervised fine-tuning for Llama-3.1-8B-Instruct.
+QLoRA supervised fine-tuning for Llama-3.1-8B-Instruct.
 
 Training objective:
     Standard causal language modeling loss (cross-entropy) computed only
     on assistant (answer) tokens. Prompt tokens are masked to -100.
 
-LoRA configuration:
+QLoRA configuration:
+    Base model loaded in NF4 4-bit quantization (bitsandbytes).
+    LoRA adapter trained in bf16 on top of the frozen quantized base.
     target_modules : q_proj, v_proj
     r              : LLM_LORA_RANK
     alpha          : LLM_LORA_ALPHA
     dropout        : LLM_LORA_DROPOUT
+
+Training setup:
+    - 8-bit AdamW optimizer (bitsandbytes) to reduce optimizer state memory
+    - Cosine LR schedule with linear warmup (warmup_ratio=0.03)
+    - Gradient checkpointing to reduce activation memory
+    - Checkpoint saved after every epoch to LLM_CKPT_DIR/epoch_{n}/
+      (only LoRA adapter weights are saved, not the quantized base)
+    - Training log saved to LLM_CKPT_DIR/train_log.jsonl
 """
 
 import os
+import json
 import logging
 
 import torch
@@ -20,9 +31,11 @@ from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    BitsAndBytesConfig,
     get_cosine_schedule_with_warmup,
 )
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
+from bitsandbytes.optim import AdamW8bit
 from tqdm import tqdm
 
 from config import (
@@ -36,6 +49,7 @@ from config import (
     LLM_LR,
     LLM_BATCH_SIZE,
     LLM_NUM_EPOCHS,
+    LLM_MAX_LENGTH,
 )
 from train.llm_trainer.dataset import SFTDataset, SFTCollator
 
@@ -45,6 +59,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+LOG_STEPS = 50
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -52,58 +67,124 @@ logger = logging.getLogger(__name__)
 
 def load_tokenizer(model_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    # Llama tokenizer has no pad token by default
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
 
 
-def load_model(model_path: str) -> AutoModelForCausalLM:
+def load_model_qlora(model_path: str) -> AutoModelForCausalLM:
+    """
+    Load base model in NF4 4-bit quantization for QLoRA training.
+
+    Memory layout:
+        - Base model weights : ~5 GB (NF4 quantized, frozen)
+        - LoRA adapter       : ~50 MB (bf16, trainable)
+        - Activations        : ~1-2 GB (gradient checkpointing enabled)
+    """
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit              = True,
+        bnb_4bit_quant_type       = "nf4",
+        bnb_4bit_compute_dtype    = torch.bfloat16,
+        bnb_4bit_use_double_quant = True,   # nested quantization, saves ~0.4 GB
+    )
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype  = torch.bfloat16,
-        device_map   = "auto",
+        quantization_config = bnb_config,
+        device_map          = {"": 0},   # put on GPU, not allowed offloaded to CPU
     )
-    model.gradient_checkpointing_enable()
+    # prepare_model_for_kbit_training:
+    #   - casts layer norms to fp32 for training stability
+    #   - enables gradient checkpointing
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     return model
 
 
-def apply_lora(model) -> tuple:
+def apply_lora(model) -> AutoModelForCausalLM:
     lora_config = LoraConfig(
-        task_type    = TaskType.CAUSAL_LM,
-        r            = LLM_LORA_RANK,
-        lora_alpha   = LLM_LORA_ALPHA,
-        lora_dropout = LLM_LORA_DROPOUT,
+        task_type      = TaskType.CAUSAL_LM,
+        r              = LLM_LORA_RANK,
+        lora_alpha     = LLM_LORA_ALPHA,
+        lora_dropout   = LLM_LORA_DROPOUT,
         target_modules = ["q_proj", "v_proj"],
-        bias         = "none",
+        bias           = "none",
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
-    return model, lora_config
-
+    return model
 
 # ---------------------------------------------------------------------------
-# Train / eval loop
+# Train epoch
 # ---------------------------------------------------------------------------
 
-def run_epoch(
+def train_epoch(
     model,
     loader: DataLoader,
     optimizer,
     scheduler,
     device: str,
-    train: bool,
     epoch: int,
+    global_step: int,
+    log_f,
+) -> tuple[float, int]:
+    model.train()
+    total_loss   = 0.0
+    window_loss  = 0.0
+    window_steps = 0
+    n_batches    = 0
+
+    for batch in tqdm(loader, desc=f"Epoch {epoch} train"):
+        input_ids      = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        labels         = batch["labels"].to(device)
+
+        outputs = model(
+            input_ids      = input_ids,
+            attention_mask = attention_mask,
+            labels         = labels,
+        )
+        loss = outputs.loss
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        scheduler.step()
+
+        loss_val      = loss.item()
+        total_loss   += loss_val
+        window_loss  += loss_val
+        window_steps += 1
+        n_batches    += 1
+        global_step  += 1
+
+        if global_step % LOG_STEPS == 0:
+            avg_window = round(window_loss / window_steps, 6)
+            record = {"epoch": epoch, "step": global_step, "train_loss": avg_window}
+            log_f.write(json.dumps(record) + "\n")
+            log_f.flush()
+            window_loss  = 0.0
+            window_steps = 0
+
+    return total_loss / max(n_batches, 1), global_step
+
+# ---------------------------------------------------------------------------
+# Val epoch
+# ---------------------------------------------------------------------------
+
+def val_epoch(
+    model,
+    loader: DataLoader,
+    device: str,
+    epoch: int,
+    global_step: int,
+    log_f,
 ) -> float:
-    model.train() if train else model.eval()
+    model.eval()
     total_loss = 0.0
     n_batches  = 0
-    desc       = f"Epoch {epoch} {'train' if train else 'val'}"
 
-    ctx = torch.no_grad() if not train else torch.enable_grad()
-
-    with ctx:
-        for batch in tqdm(loader, desc=desc):
+    with torch.no_grad():
+        for batch in tqdm(loader, desc=f"Epoch {epoch} val"):
             input_ids      = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels         = batch["labels"].to(device)
@@ -113,20 +194,15 @@ def run_epoch(
                 attention_mask = attention_mask,
                 labels         = labels,
             )
-            loss = outputs.loss
-
-            if train:
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                scheduler.step()
-
-            total_loss += loss.item()
+            total_loss += outputs.loss.item()
             n_batches  += 1
 
-    return total_loss / max(n_batches, 1)
+    val_loss = total_loss / max(n_batches, 1)
+    record   = {"epoch": epoch, "step": global_step, "val_loss": round(val_loss, 6)}
+    log_f.write(json.dumps(record) + "\n")
+    log_f.flush()
 
+    return val_loss
 
 # ---------------------------------------------------------------------------
 # Main
@@ -136,19 +212,19 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Device: {device}")
 
-    # --- tokenizer & model ---
-    logger.info(f"Loading tokenizer and model from {LLM_MODEL_PATH}...")
+    logger.info(f"Loading tokenizer from {LLM_MODEL_PATH}...")
     tokenizer = load_tokenizer(LLM_MODEL_PATH)
-    model     = load_model(LLM_MODEL_PATH)
-    model, _  = apply_lora(model)
 
-    # --- datasets ---
+    logger.info(f"Loading model in QLoRA (NF4 4-bit) from {LLM_MODEL_PATH}...")
+    model = load_model_qlora(LLM_MODEL_PATH)
+    model = apply_lora(model)
+
     logger.info("Building datasets...")
     train_ds = SFTDataset(LLM_TRAIN_PATH, tokenizer)
     val_ds   = SFTDataset(LLM_VAL_PATH,   tokenizer)
     logger.info(f"Train: {len(train_ds)}  Val: {len(val_ds)}")
 
-    collator    = SFTCollator(tokenizer.pad_token_id)
+    collator     = SFTCollator(tokenizer.pad_token_id)
     train_loader = DataLoader(
         train_ds,
         batch_size = LLM_BATCH_SIZE,
@@ -162,8 +238,9 @@ def main():
         collate_fn = collator,
     )
 
-    # --- optimizer & scheduler ---
-    optimizer    = torch.optim.AdamW(model.parameters(), lr=LLM_LR, weight_decay=0.01)
+    # 8-bit AdamW: optimizer states stored in int8 instead of fp32
+    # reduces optimizer memory from ~200MB to ~50MB for LoRA params
+    optimizer    = AdamW8bit(model.parameters(), lr=LLM_LR, weight_decay=0.01)
     total_steps  = len(train_loader) * LLM_NUM_EPOCHS
     warmup_steps = int(total_steps * 0.03)
     scheduler    = get_cosine_schedule_with_warmup(
@@ -173,22 +250,35 @@ def main():
     )
     logger.info(f"Total steps: {total_steps}  Warmup steps: {warmup_steps}")
 
-    # --- training loop ---
     os.makedirs(LLM_CKPT_DIR, exist_ok=True)
+    log_path    = os.path.join(LLM_CKPT_DIR, "train_log.jsonl")
+    global_step = 0
 
-    for epoch in range(1, LLM_NUM_EPOCHS + 1):
-        train_loss = run_epoch(model, train_loader, optimizer, scheduler, device, train=True,  epoch=epoch)
-        val_loss   = run_epoch(model, val_loader,   optimizer, scheduler, device, train=False, epoch=epoch)
+    with open(log_path, "a") as log_f:
+        for epoch in range(1, LLM_NUM_EPOCHS + 1):
 
-        logger.info(f"Epoch {epoch}/{LLM_NUM_EPOCHS}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")
+            train_loss, global_step = train_epoch(
+                model, train_loader, optimizer, scheduler,
+                device, epoch, global_step, log_f,
+            )
 
-        # save checkpoint
-        ckpt_path = os.path.join(LLM_CKPT_DIR, f"epoch_{epoch}")
-        model.save_pretrained(ckpt_path)
-        tokenizer.save_pretrained(ckpt_path)
-        logger.info(f"Checkpoint saved → {ckpt_path}")
+            val_loss = val_epoch(
+                model, val_loader,
+                device, epoch, global_step, log_f,
+            )
 
-    logger.info("Training complete.")
+            logger.info(
+                f"Epoch {epoch}/{LLM_NUM_EPOCHS}  "
+                f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}"
+            )
+
+            # save only LoRA adapter weights (base model is not saved)
+            ckpt_path = os.path.join(LLM_CKPT_DIR, f"epoch_{epoch}")
+            model.save_pretrained(ckpt_path)
+            tokenizer.save_pretrained(ckpt_path)
+            logger.info(f"Checkpoint saved → {ckpt_path}")
+
+    logger.info(f"Training complete. Log → {log_path}")
 
 
 if __name__ == "__main__":

@@ -62,8 +62,8 @@ NO_ANSWER   = "This information is not covered in the provided context."
 RANDOM_SEED = 42
 
 # 3000 pos, 200 neg, val split is 1/5 of train targets
-LLM_MINE_POS          = 5
-LLM_MINE_NEG          = 1
+LLM_MINE_POS          = 3000
+LLM_MINE_NEG          = 200
 VAL_MINE_POS = LLM_MINE_POS // 5
 VAL_MINE_NEG = LLM_MINE_NEG // 5
 

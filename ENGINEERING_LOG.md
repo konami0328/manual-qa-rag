@@ -600,6 +600,8 @@ shift.
 **GENERATION_TOPK=5:** Top-5 chunks passed to LLM as context. Balances context completeness
 against prompt length.
 
+![Threshold and top k setting](eval/retrieval/results/threshold_cdf.png)
+
 ---
 
 ### Inference Pipeline (`eval/generate/generate_vllm.py`)
@@ -649,10 +651,33 @@ rather than a primary quality signal.
 
 ### Results
 
-| Metric | Score |
-|--------|-------|
-| Refusal rate (negatives) | — |
-| Faithfulness | — |
-| Answer Relevancy | — |
-| ROUGE-L | — |
-| Retrieval hit rate (eval subset) | — |
+See Table below.
+
+---
+
+## 9. Fine-tune LLM (QLoRA)
+
+**Trainable parameters:**
+```
+trainable params: 6,815,744 || all params: 8,037,076,992 || trainable%: 0.0848
+```
+
+OOM led to batch_size=1, resulting in noisy training curve. Val loss increased slightly from epoch 1 (0.2650) to epoch 2 (0.2727), indicating mild overfitting.
+
+![Training Curve](train/llm_trainer/training_curves.png)
+
+| Metric | Baseline (Pre-finetuned LLM) | Fine-tuned LLM |
+|--------|------------------------------|----------------|
+| Retrieval hit rate (eval subset) | 0.9100 | 0.9100 |
+| Refusal rate (negatives) | 0.9667 | 0.9800 |
+| Faithfulness (RAGAS) | 0.8972 | 0.8379 |
+| Answer Relevancy (RAGAS) | 0.8813 | 0.8738 |
+| ROUGE-L | 0.4778 | 0.5661 |
+
+**Key Insights:**
+
+Fine-tuning improved ROUGE-L (+18.5%) and refusal rate (+1.4%), indicating better style alignment with ground truth answers and marginally stronger out-of-scope rejection. Answer Relevancy remained stable (-0.9%), suggesting the model continues to address questions as intended.
+
+The notable drop in Faithfulness (-6.3%) warrants investigation. A likely explanation is that fine-tuning encouraged the model to synthesize information across multiple retrieved chunks, producing more comprehensive answers that contain statements RAGAS cannot directly verify against any single chunk. This reflects a tension between retrieval-grounded generation and multi-source synthesis, rather than an increase in hallucination.
+
+Retrieval performance is unchanged by design, as the retrieval and reranking components were not modified between evaluations.

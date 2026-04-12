@@ -6,7 +6,7 @@ load_dotenv()
 # =============================================================================
 # Root
 # =============================================================================
-ROOT = "/mnt/e/ML_Engineer/manual-qa"
+ROOT = "/root/autodl-tmp/manual-qa-rag"
 
 # =============================================================================
 # 1. Parse
@@ -90,13 +90,13 @@ LLM_TRAIN_PATH        = os.path.join(ROOT, "data", "llm", "train_samples.jsonl")
 LLM_VAL_PATH          = os.path.join(ROOT, "data", "llm", "val_samples.jsonl")
 LLM_CKPT_DIR          = os.path.join(ROOT, "data", "llm", "ckpt")
 LLM_QUANTIZED_PATH    = os.path.join(ROOT, "data", "llm", "quantized")
-LLM_MODEL_PATH        = "models/LLM-Research/Meta-Llama-3.1-8B-Instruct"
+LLM_MODEL_PATH        = "/autodl-fs/data/models/LLM-Research/Meta-Llama-3.1-8B-Instruct"
 
 LLM_LORA_RANK         = 16
 LLM_LORA_ALPHA        = 32
 LLM_LORA_DROPOUT      = 0.1
 LLM_LR                = 2e-4
-LLM_BATCH_SIZE        = 4
+LLM_BATCH_SIZE        = 1
 LLM_NUM_EPOCHS        = 2
 LLM_MAX_LENGTH        = 2048
 
@@ -104,5 +104,5 @@ LLM_MAX_LENGTH        = 2048
 # 8. Generation
 # =============================================================================
 VLLM_BASE_URL    = "http://localhost:8000/v1"
-VLLM_MODEL_NAME  = os.path.join(ROOT, "models/LLM-Research/Meta-Llama-3.1-8B-Instruct")
+VLLM_MODEL_NAME  = os.path.join(ROOT, "data", "llm", "quantized")
 VLLM_MAX_WORKERS = 1
