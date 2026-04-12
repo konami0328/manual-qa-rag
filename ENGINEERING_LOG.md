@@ -701,7 +701,7 @@ To isolate the effect of page citations, we stripped all `[p.N]` patterns from f
 | [0.8, 1.0] | 10 | 0.989 | 0.988 | −0.001 |
 | **Overall** | **44** | **0.562** | **0.808** | **+0.246** |
 
-![Ablation Experiment Result](eval\generate\results\ablation_results.png)
+![Ablation Experiment Result](eval/generate/results/ablation_results.png)
 
 No sample showed a decrease after stripping — citations are a strictly one-directional negative interference on RAGAS Faithfulness scoring. The effect is strongest in the mid-low score range (`[0.2, 0.8)`), where the fine-tuned model most frequently appended citations. The `[0.8, 1.0]` bin is unaffected, consistent with high-scoring answers containing few or no citations.
 
