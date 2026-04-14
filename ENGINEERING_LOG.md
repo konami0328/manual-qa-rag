@@ -1,10 +1,37 @@
-# RAG Pipeline Development Log
+# Tesla Model Y RAG QA — Engineering Log
+
+## Table of Contents
+
+1. [Walking Skeleton](#1-walking-skeleton)
+2. [Parse Optimization](#2-parse-optimization)
+   - [Issues & Fixes](#issues--fixes-in-order)
+3. [Retrieval Optimization](#3-retrieval-optimization)
+   - [Retriever: BGE-M3](#retriever-bge-m3-retrieve_bgepy)
+   - [Fusion: RRF](#fusion-rrf)
+   - [Hybrid: BGE-M3 + BM25 Union](#hybrid-bm25-union-retrieve_hybridpy)
+4. [Reranker (Off-the-Shelf)](#4-reranker-off-the-shelf)
+5. [Evaluation Dataset Generation](#5-evaluation-dataset-generation)
+   - [Data Construction](#evaluation-data-construction)
+   - [Fix: Paraphrase Leakage](#fix-paraphrase-leakage-in-trainvaltest-split)
+6. [Retrieval Baseline](#6-retrieval-baseline)
+7. [Reranker Fine-tuning](#7-reranker-fine-tuning)
+   - [Training Data Construction](#training-data-hard-negative-mining-minepy)
+   - [Training Design](#training-design-trainpy)
+   - [💡Retrieval Eval: Full Comparison](#retrieval-eval-full-comparison-post-fine-tuning)
+8. [Generation Baseline](#8-generation-baseline)
+   - [Evaluation Design](#evaluation-design-evalgenerateevalpy)
+9. [LLM Fine-tuning (QLoRA)](#9-llm-fine-tuning-qlora)
+   - [Training Data Construction](#training-data-construction)
+   - [Training Design](#training-design)
+   - [💡Generation Eval: Full Comparison](#results-1)
+   - [Error Analysis: Faithfulness Drop](#error-analysis-faithfulness-drop-after-fine-tuning)
+10. [Quantization (AWQ INT4)](#10-quantization-awq-int4)
 
 ## 1. Walking Skeleton
 
 Minimal end-to-end pipeline to validate system connectivity:
 - **Parse**: `RecursiveCharacterTextSplitter`, text only (images ignored)
-- **Retrieve**: BM25 only
+- **Retrieve**: BM25 only (probabilistic keyword retrieval, an improvement over TF-IDF)
 - **Generate**: Llama-3.1-8B-Instruct (no fine-tuning)
 
 ---
@@ -67,9 +94,17 @@ load_pdf() → llm_clean_and_split() → pickle → split on <<<SPLIT>>> → sav
 
 Added `chunk_index` (global, zero-based, continuous across pages) to each chunk's metadata at index time.
 
-**Reason:** Required for reranker fine-tuning — when mining hard negatives, chunks adjacent to the ground truth (`chunk_index` distance ≤ 1) must be excluded regardless of page boundary. Page number alone is unreliable: two chunks on different pages may be content-continuous (cross-page split, Issue 5), and two chunks on the same page may be semantically unrelated. `chunk_index` is the only reliable proximity signal.
+**Reason:** [Reranker fine-tuning](#7-reranker-fine-tuning) requires hard negative mining, where rank 2–5 and rank 6–10 chunks are sampled as weak positives and negatives. Without an adjacency filter, chunks immediately adjacent to the ground truth may be sampled as weak positives or negatives — this is a real risk given cross-page splits (Issue 5): an alert entry split across pages produces two chunks that are content-continuous but have different page numbers. Using page number to detect adjacency would miss this case. `chunk_index` (global, continuous across pages) is the only reliable proximity signal. Out of caution, all chunks within distance ≤ 1 are excluded regardless of whether they are actually content-continuous.
 
 **Impact:** `chunk_index.py` rerun required after any re-chunking. QA dataset unaffected — `unique_id` is `md5(page_content)` and does not depend on metadata.
+
+**Chunk metadata schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `unique_id` | `str` | `md5(page_content)`. Stable identifier across re-chunking. |
+| `page` | `int` | Source page number in the Owner's Manual. |
+| `chunk_index` | `int` | Global zero-based index, continuous across pages. Used for adjacency filtering in hard negative mining. |
 
 ---
 
@@ -84,15 +119,15 @@ Observed example: `PCS_a073` header on page 287, full body on page 288 — two s
 
 | Approach | Verdict |
 |----------|---------|
-| Hard rules (detect incomplete page by missing `What to do:` section) | ❌ Unreliable — page can end after alert title with no detectable signal |
+| Hard rules (detect incomplete page by last sentence structure) | ❌ Unreliable — a page can end mid-topic after a syntactically complete sentence, leaving no detectable signal |
 | LLM merge (detect and merge incomplete pages before cleaning) | ✅ Correct but adds pipeline complexity and an extra LLM call per page |
-| Overlapping page pairs `[N, N+1]`, `[N+1, N+2]` | ❌ Shifts the problem rather than solving it; also doubles collection size |
+| Overlapping page pairs `[N, N+1]`, `[N+1, N+2]` | ❌ Doubles collection size; retrieval surfaces duplicate content, complicating reranking and generation |
 | Increase `TOPK` | ✅ Pragmatic mitigation — retrieval will likely surface both halves for a relevant query |
 
 **Decision: defer.**
-With `TOPK=10`, retrieval likely surfaces both halves of a split alert together in context. Downstream impact is further mitigated by BM25 union (which recovers short incomplete chunks via exact keyword match — see Section 3) and the reranker (which scores both halves above threshold at `RERANKER_THRESHOLD=0.1` — see Section 4). Revisit only if answer quality is measurably degraded.
+With higher `TOPK`, retrieval likely surfaces both halves of a split alert together in context. Downstream impact is further mitigated by BM25 union (which recovers short incomplete chunks via exact keyword match — see Section 3) and the reranker (which scores both halves above the inference threshold — see Section 4). Revisit only if answer quality is measurably degraded.
 
-**If fix becomes necessary:** implement LLM merge as a `merge_pages()` step in `parse.py`, storing page range `[N, N+1]` in metadata instead of a single page number to preserve source traceability.
+**If fix becomes necessary:** implement LLM merge as a `merge_pages()` step in `parse.py`.
 
 ---
 
@@ -122,7 +157,7 @@ query
   │                                                             │ union + dedup
   └── BM25 ──────────────────────────────────────── top-k ──────┘
                                                       ↓
-                                               candidate pool (~14-20 docs)
+                                               candidate pool
                                                       ↓
                                                    reranker
                                                       ↓
@@ -146,12 +181,9 @@ ColBERT stores one vector per token (N vectors/doc vs 1 for dense) — ~50× sto
 **`encode_queries` vs `encode`:**
 bge-m3 prepends an internal query-specific prefix during `encode_queries()`. This prefix shifts the embedding distribution toward the query space, which is critical for asymmetric retrieval (short query vs long document). Using `encode()` for queries degrades retrieval quality. Always: `encode_queries()` for queries, `encode()` for documents.
 
-**Index persistence:**
-Collection build skipped if Milvus collection already exists (`force_rebuild=False`). Always pass `force_rebuild=True` explicitly after re-chunking to keep the index in sync with MongoDB.
-
 ---
 
-### Fusion: RRF (Reciprocal Rank Fusion)
+### Fusion: RRF
 
 **Principle:** RRF combines multiple ranked lists by assigning each document a score of `1 / (k + rank)`, where `k=60` is a smoothing constant, then summing scores across lists. Documents ranked highly in multiple lists accumulate higher combined scores.
 
@@ -164,7 +196,7 @@ RRF is rank-based — it requires no score normalization across heterogeneous sc
 
 ---
 
-### Hybrid: BM25 Union (`retrieve_hybrid.py`)
+### Hybrid: BGE-M3 + BM25 Union (`retrieve_hybrid.py`)
 
 **Why BM25 as a union instead of a third RRF signal:**
 BGE sparse already covers most of BM25's lexical matching capability (learned sparse weights vs frequency-based TF-IDF). Adding BM25 as a third RRF signal would rarely change rankings. Instead, BM25 is added as a **safety net**: any document retrieved by BM25 is guaranteed to appear in the candidate pool regardless of RRF rank, ensuring exact keyword matches are never silently dropped.
@@ -187,7 +219,7 @@ Hybrid retrieval returns ~14-20 candidates, many of which share surface-level ke
 ### Architecture
 
 ```
-~14-20 candidates from HybridRetriever
+candidates from HybridRetriever
   ↓
 cross-encoder: score each (query, chunk) pair jointly
   ↓
@@ -220,18 +252,6 @@ RRF scores are rank-derived (`1/(60+rank)`) — they reflect list position, not 
 
 ---
 
-### Threshold Calibration
-
-`RERANKER_THRESHOLD=0.1` — validated on query "How to Adjust the Shoulder Anchor Height":
-- Page 45 (main procedure): `0.9994` ✅
-- Page 46 (step 4 continuation, cross-page split): `0.23` ✅
-- All 12 irrelevant candidates: dropped ✅
-
-**Constraint from Issue 5:**
-Page 46 is a short incomplete chunk (step 4 only, lacks full context). Its rerank score (`0.23`) is substantially lower than page 45 (`0.9994`) despite being part of the same procedure. This is expected — the chunk lacks full context. It survives `RERANKER_THRESHOLD=0.1` but is fragile. **Do not raise threshold above `0.2` until Issue 5 (cross-page merge) is resolved.**
-
----
-
 ### Decisions Deferred
 
 | Decision | Reason |
@@ -239,7 +259,6 @@ Page 46 is a short incomplete chunk (step 4 only, lacks full context). Its reran
 | Qwen3-Reranker-4B | Heavier (4B params), slower; current cross-encoder sufficient for observed query patterns. Revisit for complex multi-faceted queries |
 | Query decomposition | Multi-part queries ("how to adjust X and Y") degrade retrieval + reranking. Implement if such patterns appear in eval |
 | WeightedRanker sparse:dense ratio | No eval data yet to justify tuning |
-| RERANKER_THRESHOLD fine-tuning | Blocked by Issue 5 — page 46 is fragile at current threshold |
 
 ---
 
@@ -251,7 +270,7 @@ Before optimizing any pipeline component, a ground truth QA dataset is needed to
 
 ---
 
-### Architecture
+### Evaluation Data Construction
 
 ```
 MongoDB chunks
@@ -335,7 +354,7 @@ Split at the **item level** (one item = one original question + its paraphrases)
 
 ---
 
-## 6. Retrieval Evaluation
+## 6. Retrieval Baseline
 
 ### Overview
 
@@ -627,6 +646,17 @@ The generation baseline (Faithfulness=0.8972, ROUGE-L=0.4778) reveals that the o
 
 ---
 
+### Training Data Construction
+
+For each question in the train split, run HybridRetriever + fine-tuned reranker to retrieve top-5 chunks as context. Pair with the ground truth answer from the QA dataset to form `(context, question, answer)` triples.
+
+**Why use the fine-tuned reranker instead of ground truth chunks:**
+The LLM will see reranker output at inference time, not perfect ground truth context. Training on reranker-retrieved context closes this distribution gap — the model learns to answer from the same imperfect, occasionally partial context it will encounter in production.
+
+**Negative samples:** MS MARCO out-of-domain questions are included with a fixed refusal answer, teaching the model to decline questions outside the manual's scope.
+
+---
+
 ### Training Design
 
 | Decision | Choice | Reason |
@@ -636,7 +666,6 @@ The generation baseline (Faithfulness=0.8972, ROUGE-L=0.4778) reveals that the o
 | LoRA r / alpha / dropout | 16 / 32 / 0.1 | Same values as reranker fine-tuning — see Section 7 for principle explanation |
 | Optimizer | AdamW 8-bit (bitsandbytes) | Optimizer states stored in int8 instead of fp32, reducing optimizer memory from ~200MB to ~50MB for LoRA parameters |
 | LR schedule | Cosine with linear warmup (warmup_ratio=0.03) | Warmup prevents large early gradient steps on the frozen-then-unfrozen adapter; cosine decay provides smooth convergence |
-| Gradient checkpointing | Enabled | Recomputes activations during backward pass instead of storing them. Trades compute for memory — critical for reducing activation memory, which scales linearly with batch size and sequence length |
 | Batch size | 1 | OOM with batch_size > 1 even with gradient checkpointing enabled. Activation memory at `LLM_MAX_LENGTH=2048` exceeds available GPU memory at batch > 1 |
 | Epochs | 2 | Val loss increases from epoch 1 to epoch 2, indicating mild overfitting; training stopped |
 | Loss | Cross-entropy on assistant tokens only | Prompt tokens masked to -100; loss computed only on answer portion |

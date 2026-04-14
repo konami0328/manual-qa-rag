@@ -13,42 +13,38 @@ A production-oriented RAG pipeline for question answering over the Tesla Model Y
 
 ## System Overview
 
+```mermaid
+flowchart TD
+    subgraph KD["🔬 Knowledge Distillation"]
+        direction TB
+        A[DeepSeek-Chat] --> B[Generate QA pairs<br/>per chunk]
+        B --> C[Quality filter<br/>score 1–5]
+        C --> D[Paraphrase expansion<br/>×3 per question]
+        D --> E[(QA Dataset)]
+        E --> F[Reranker training data<br/>hard negative mining<br/>positive: 1.0 / weak pos: 0.5 / hard neg: 0.0]
+        E --> G[LLM training data<br/>reranked context construction]
+    end
+
+    subgraph INF["⚙️ Inference Pipeline"]
+        direction TB
+        PDF[PDF<br/>Owner's Manual] --> PARSE[LLM-based parse & chunk]
+        PARSE --> MONGO[(MongoDB)]
+        MONGO --> BGE[BGE-M3<br/>dense + sparse]
+        MONGO --> BM25[BM25]
+        BGE --> RRF[RRF fusion — Milvus]
+        BM25 --> UNION[Union + dedup]
+        RRF --> UNION
+        UNION --> RERANKER[Fine-tuned Reranker<br/>bge-reranker-v2-m3 + LoRA]
+        RERANKER --> LLM[Fine-tuned LLM<br/>Llama-3.1-8B + QLoRA, AWQ INT4, vLLM]
+        LLM --> SERVE[FastAPI /ask<br/>streaming SSE + Gradio UI]
+    end
+
+    F -->|reranker training data| RERANKER
+    G -->|LLM training data| LLM
+
 ```
-┌─────────────────────────────────────────┐
-│         Knowledge Distillation          │
-│                                         │
-│  DeepSeek-Chat                          │
-│    ├── generate QA pairs (per chunk)    │
-│    ├── quality filter (score 1–5)       │
-│    └── paraphrase expansion (×3)        │
-│              ↓                          │
-│       QA Dataset                        │
-│    ├── → reranker training data         │
-│    │      (mine.py, three-tier labels)  │
-│    └── → LLM training data              │
-│           (fine-tuned reranked context) │
-└─────────────────────────────────────────┘
-                              
-┌──────────────────────────────────────────────────────────────────────────┐
-│                           Inference Pipeline                             │
-│                                                                          │
-│  PDF (Owner's Manual)                                                    │
-│       ↓                                                                  │
-│  LLM-based parse & chunk  ──────────────────────────────→  MongoDB       │
-│       ↓                                                                  │
-│  Hybrid Retrieval                                                        │
-│  ├── BGE-M3 dense + sparse  →  RRF fusion (Milvus)  ─┐                   │
-│  └── BM25                   →  union                 ↓                   │
-│                                             ~10 candidates               │
-│                                                      ↓                   │
-│  Fine-tuned Reranker  (bge-reranker-v2-m3 + LoRA)                        │
-│                                                      ↓                   │
-│  Fine-tuned LLM  (Llama-3.1-8B-Instruct + QLoRA, AWQ INT4, vLLM)         │
-│                                                      ↓                   │
-│  FastAPI  /ask  (streaming SSE)  +  Gradio UI                            │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+
+> Detailed data pipeline: [Reranker training data](#stage-3--reranker-fine-tuning) · [LLM training data](#stage-4--llm-fine-tuning-qlora)
 
 ---
 
@@ -90,7 +86,7 @@ Reranker fine-tuning: +9.7% Hit@1, +5.9% MRR relative to off-the-shelf baseline.
 | Answer Relevancy (RAGAS) | 0.8813 | 0.8738 |
 | ROUGE-L | 0.4778 | **0.5661** |
 
-Fine-tuning improved ROUGE-L by +18.5%. The Faithfulness drop is likely a scoring artifact: the fine-tuned model learned to append page citations from training data, which RAGAS cannot verify against raw chunk content and scores as unfaithful. — see `ENGINEERING_LOG.md` §9 for discussion.
+Fine-tuning improved ROUGE-L by +18.5%. The Faithfulness drop is likely a **scoring artifact**: the fine-tuned model learned to append page citations from training data, which RAGAS cannot verify against raw chunk content and scores as unfaithful. — see `ENGINEERING_LOG.md` §9 for discussion.
 
 ---
 
@@ -148,8 +144,8 @@ bash config.ini
 ### 3. Parse and index the manual
 
 ```bash
-python parse.py
-python chunk_index.py
+python -m src.parser.parse
+python -m src.parser.chunk_index
 ```
 
 ### 4. Start the API server
@@ -196,6 +192,15 @@ Key decisions: LLM-based semantic splitting (over `RecursiveCharacterTextSplitte
 ### Stage 2 — Build Evaluation & Training Dataset (Knowledge Distillation)
 
 Use DeepSeek-Chat to distill knowledge from the manual into a structured QA dataset. This dataset is the upstream source for both reranker and LLM training data.
+
+```mermaid
+flowchart TD
+    A[(QA Dataset<br/>train split)] --> B[HybridRetriever + Off-the-shelf Reranker<br/>topk=10, rank candidates]
+    B --> |avoid false negatives| C[Adjacency filter<br/>exclude neighbors of ground truth]
+    C --> D[Ground truth chunk → 1.0<br/>rank 2–5 chunk → 0.5<br/>rank 6–10 chunk → 0.0]
+    D --> E[(Train triplets)]
+    E --> F[LoRA fine-tuning<br/>pointwise MSE loss]
+```
 
 ```bash
 # Generate 5 QA pairs per chunk
@@ -250,6 +255,18 @@ Chunks within `chunk_index` distance ≤ 1 of ground truth are excluded before s
 ### Stage 4 — LLM Fine-tuning (QLoRA)
 
 Construct LLM training data using the fine-tuned reranker, then fine-tune with QLoRA.
+
+```mermaid
+flowchart TD
+    A[(QA Dataset<br/>train split)] --> B[HybridRetriever + Fine-tuned Reranker<br/>top-5 chunks as context]
+    B --> C["(context, question, answer) triple"]
+    C --> D{Sample type}
+    D -->|in-domain| E[Positive: answer from QA dataset]
+    D -->|MS MARCO| F[Negative: out-of-domain question]
+    E --> G[(LLM training data)]
+    F --> G
+    G --> H[QLoRA fine-tuning<br/>cross-entropy on answer tokens only]
+```
 
 ```bash
 # Build LLM training data:
