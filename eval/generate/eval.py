@@ -21,7 +21,7 @@ eval/generate/results/generation_eval_<timestamp>.jsonl
 
 Usage
 -----
-python eval.py <path/to/generation_raw_*.jsonl>
+python -m eval.generate.eval <path/to/generation_raw_*.jsonl>
 """
 
 import os
@@ -56,7 +56,7 @@ RANDOM_SEED  = 42
 
 NO_ANSWER   = "This information is not covered in the provided context."
 OUTPUT_DIR  = os.path.join(os.path.dirname(__file__), "results")
-OUTPUT_PATH = os.path.join(OUTPUT_DIR, "generation_eval.jsonl")
+OUTPUT_PATH = os.path.join(OUTPUT_DIR, "generation_eval_processed.jsonl")
 
 # ---------------------------------------------------------------------------
 # BGE-M3 embedding wrapper for RAGAS

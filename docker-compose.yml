@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data/mongodb/data:/data/db
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/llm/quantized:/models/quantized
+    command: >
+      --model /models/quantized
+      --dtype float16
+      --quantization awq
+      --max-model-len 4096
+      --gpu-memory-utilization 0.75
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: fastapi
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8001
+    environment:
+      - MONGO_HOST=mongodb
+    depends_on:
+      - mongodb
+      - vllm
+    restart: unless-stopped
+
+  gradio:
+    build: .
+    container_name: gradio
+    ports:
+      - "7860:7860"
+    command: python app/gradio/app.py
+    depends_on:
+      - api
+    restart: unless-stopped

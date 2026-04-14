@@ -78,6 +78,8 @@ class RAGUser(HttpUser):
                pure hammering and better simulate real usage.
     """
     wait_time = between(1, 3)
+    network_timeout = 60.0
+    connection_timeout = 60.0
 
     @task
     def ask(self):
